@@ -1,0 +1,73 @@
+digraph UML_Class_diagram {
+    graph [
+        label="Primary object schema"
+        labelloc="t"
+        fontname="Times New Roman,Times,serif"
+        splines="curved"
+    ]
+    node [
+        fontname="Times New Roman,Times,serif"
+        shape=record
+        style=filled
+    ]
+    edge [fontname="Times New Roman,Times,serif"]
+	Geometry [
+		shape=plain
+        fillcolor="#88CCEE"
+		label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4">
+			<tr> <td> <b>geometry</b> </td> </tr>
+			<tr> <td>
+				<table border="0" cellborder="0" cellspacing="0" >
+					<tr> <td port="gid" align="left" >- geometry_id</td> </tr>
+					<tr> <td align="left">- symbols</td> </tr>
+                    <tr> <td align="left">- coordinates</td> </tr>
+                    <tr> <td align="left">- charge</td> </tr>
+                    <tr> <td align="left">- spin</td> </tr>
+                    <tr> <td align="left">- formula</td> </tr>
+                    <tr> <td align="left">- is_canonical</td> </tr>
+				</table>
+			</td> </tr>
+		</table>>
+	]
+	Link [
+		shape=plain
+        fillcolor="#DDDDDD"
+		label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4">
+			<tr> <td> <b>calculation_geometry_link</b> </td> </tr>
+			<tr> <td>
+				<table border="0" cellborder="0" cellspacing="0" >
+					<tr> <td port="cid" align="left" >- calculation_id</td> </tr>
+					<tr> <td port="gid" align="left" >- geometry_id</td> </tr>
+					<tr> <td port="role" align="left" >- role</td> </tr>
+				</table>
+			</td> </tr>
+		</table>>
+	]
+	Calculation [
+		shape=plain
+        fillcolor="#44AA99"
+		label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4">
+			<tr> <td> <b>calculation</b> </td> </tr>
+			<tr> <td>
+				<table border="0" cellborder="0" cellspacing="0" >
+					<tr> <td port="cid" align="left" >- calculation_id</td> </tr>
+					<tr> <td align="left">- program</td> </tr>
+                    <tr> <td align="left">- program_keywords</td> </tr>
+                    <tr> <td align="left">- super_program</td> </tr>
+                    <tr> <td align="left">- super_keywords</td> </tr>
+                    <tr> <td align="left">- cmdline_args</td> </tr>
+                    <tr> <td align="left">- calc_type</td> </tr>
+                    <tr> <td align="left">- method</td> </tr>
+                    <tr> <td align="left">- basis</td> </tr>
+				</table>
+			</td> </tr>
+		</table>>
+	]
+
+	{ rank=same; Geometry; Calculation; }
+
+    edge[dir=back]
+
+    Geometry:gid:e -> Link:gid:e
+    Calculation:cid:w -> Link:cid:w
+}

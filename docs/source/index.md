@@ -4,7 +4,6 @@
 :maxdepth: 2
 :caption: Contents
 
-page1
-page2
+core_objects/index
 apidocs/index
 :::
