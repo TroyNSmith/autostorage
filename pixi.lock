@@ -12,7 +12,7 @@ environments:
     - https://pypi.org/simple
     packages:
       linux-64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-2_gnu.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/brotli-1.2.0-hed03a55_1.conda
@@ -158,7 +158,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/cf/22/fdc2e30d43ff853720042fa15baa3e6122722be1a7950a98233ebb55cd71/eval_type_backport-0.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/aa/d95279e7a0edcea470ee3ccf964a089c7a96b0d266a0730a3504e99a7d93/qccodec-0.10.0-py3-none-any.whl
       osx-64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-types-0.7.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/asttokens-3.0.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.1.4-hbd8a1cb_0.conda
@@ -293,7 +293,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/cf/22/fdc2e30d43ff853720042fa15baa3e6122722be1a7950a98233ebb55cd71/eval_type_backport-0.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/aa/d95279e7a0edcea470ee3ccf964a089c7a96b0d266a0730a3504e99a7d93/qccodec-0.10.0-py3-none-any.whl
       osx-arm64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-types-0.7.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/asttokens-3.0.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.1.4-hbd8a1cb_0.conda
@@ -435,7 +435,7 @@ environments:
     - https://pypi.org/simple
     packages:
       linux-64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-2_gnu.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/astroid-3.3.11-py314hdafbbf9_1.conda
@@ -660,7 +660,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/cf/22/fdc2e30d43ff853720042fa15baa3e6122722be1a7950a98233ebb55cd71/eval_type_backport-0.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/aa/d95279e7a0edcea470ee3ccf964a089c7a96b0d266a0730a3504e99a7d93/qccodec-0.10.0-py3-none-any.whl
       osx-64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/accessible-pygments-0.0.5-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/alabaster-1.0.0-pyhd8ed1ab_1.conda
@@ -874,7 +874,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/cf/22/fdc2e30d43ff853720042fa15baa3e6122722be1a7950a98233ebb55cd71/eval_type_backport-0.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/aa/d95279e7a0edcea470ee3ccf964a089c7a96b0d266a0730a3504e99a7d93/qccodec-0.10.0-py3-none-any.whl
       osx-arm64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/accessible-pygments-0.0.5-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/alabaster-1.0.0-pyhd8ed1ab_1.conda
@@ -1088,9 +1088,9 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/cf/22/fdc2e30d43ff853720042fa15baa3e6122722be1a7950a98233ebb55cd71/eval_type_backport-0.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/aa/d95279e7a0edcea470ee3ccf964a089c7a96b0d266a0730a3504e99a7d93/qccodec-0.10.0-py3-none-any.whl
 packages:
-- conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.10-pyh4616a5c_0.conda
-  sha256: 85b37ef3ed13ab862bf4d8243afddf3ba5572a94fb59ed38291cb6d333b41a4b
-  md5: 40c9403537dffcd7137a65f2b8eeb240
+- conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.11-pyh4616a5c_0.conda
+  sha256: 73bb06af840625e034f17e13c03a2f9638734172a1e24cbcffca5f7558644915
+  md5: 551b57984fc687be05690f4e6aa7abf0
   depends:
   - python >=3.12
   - python *
@@ -1099,10 +1099,11 @@ packages:
   - pint >=0.24
   - py3dmol >=2.5
   - pydantic >=2.5
+  - pyparsing >=3.3.2
   - rdkit >=2025
   - scipy >=1.13
-  size: 17486
-  timestamp: 1777555835412
+  size: 17513
+  timestamp: 1777904935056
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
   sha256: fe51de6107f9edc7aa4f786a70f4a883943bc9d39b3bb7307c04c41410990726
   md5: d7c89558ba9fa0495403155b64376d81

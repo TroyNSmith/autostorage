@@ -4,7 +4,7 @@ version = "0.0.7"
 authors = [{name = "Andreas V. Copan", email = "avcopan@uga.edu"}]
 requires-python = ">= 3.12"
 dependencies = [
-    "automol==0.0.10",
+    "automol==0.0.11",
     "pint>=0.25.2",
     "qcdata>=0.17.0",
     "sqlmodel>=0.0.31",
