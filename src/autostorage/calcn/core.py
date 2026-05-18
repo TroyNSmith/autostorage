@@ -12,28 +12,22 @@ class Calculation(BaseModel):
 
     Attributes
     ----------
-    # - Program Input -------
     program
         Quantum chemistry program used (psi4, ORCA, ...)
     program_keywords
-        (Optional) Quantum chemistry program keywords.
+        *Optional.* Quantum chemistry program keywords
     super_program
-        (Optional) Geometry optimizer program (geomeTRIC, ...).
+        *Optional.* Geometry optimizer program (geomeTRIC, ...)
     super_keywords
-        (Optional) Geometry optimizer keywords.
+        *Optional.* Geometry optimizer keywords
     cmdline_args
-        (Optional) Command line arguments.
-    input
-        (Optional) Input file. [ PLACEHOLDER ]
-    files
-        (Optional) Additional input files. [ PLACEHOLDER ]
-    # - Methods -------------
+        *Optional.* Command line arguments
     calc_type
         Calculation type (energy, optimization, ...)
     method
         Computational method (B3LYP, MP2, ...)
     basis
-        (Optional) Basis set.
+        *Optional.* Basis set
     """
 
     # - Program Input -------

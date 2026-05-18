@@ -3,8 +3,8 @@
 Core AutoStorage objects.
 
 :::{toctree}
-:maxdepth: 1
+:maxdepth: 2
 
-The Database <database>
-The Models <models>
+Database Manager <database>
+Database Models <models/index>
 :::

@@ -26,48 +26,29 @@ class CalculationRow(PartialMixin, Calculation, SQLModel, table=True):
     program
         Quantum chemistry program used (psi4, ORCA, ...)
     program_keywords
-        (Optional) Quantum chemistry program keywords.
+        *Optional.* Quantum chemistry program keywords
     super_program
-        (Optional) Geometry optimizer program (geomeTRIC, ...).
+        *Optional.* Geometry optimizer program (geomeTRIC, ...)
     super_keywords
-        (Optional) Geometry optimizer keywords.
+        *Optional.* Geometry optimizer keywords
     cmdline_args
-        (Optional) Command line arguments.
-    input
-        (Optional) Input file. [ PLACEHOLDER ]
-    files
-        (Optional) Additional input files. [ PLACEHOLDER ]
+        *Optional.* Command line arguments
     calc_type
         Calculation type (energy, optimization, ...)
     method
         Computational method (B3LYP, MP2, ...)
     basis
-        (Optional) Basis set.
-
-    SQLModel Relationships
-    ----------------------
+        *Optional.* Basis set
     provenance
         Linked ProvenanceRow.
     geometry_links
-        List of linked CalculationGeometryLinks allowing access to Role directly.
+        Linked CalculationGeometryLinks with Role attribute.
     hashes
-        List of linked hashes.
+        Linked hashes.
     energies
-        List of linked energies.
+        Linked energies.
     stationary_points
-        List of linked stationary points.
-
-    Methods
-    -------
-    from_calculation
-        Convert Calculation to CalculationRow.
-    calculation
-        Convert CalculationRow to Calculation.
-    program_input
-        Convert CalculationRow to qcio program_input.
-    from_program_output
-        Convert qc ProgramOutput to CalculationRow.
-        Instantiates and links ProvenanceRow.
+        Linked stationary points.
     """
 
     # - SQL Metadata ------------------
@@ -226,25 +207,25 @@ class ProvenanceRow(PartialMixin, SQLModel, table=True):
     Parameters
     ----------
     program_version
-        (Optional) Program version.
+        *Optional.* Program version.
     super_version
-        (Optional) Superprogram version, if applicable.
+        *Optional.* Superprogram version, if applicable.
     input
-        (Optional) Input file.
+        *Optional.* Input file.
     files
-        (Optional) Additional input files.
+        *Optional.* Additional input files.
     scratch_dir
-        (Optional) Working directory.
+        *Optional.* Working directory.
     wall_time
-        (Optional) Compute wall time.
+        *Optional.* Compute wall time.
     host_name
-        (Optional) Name of host machine.
+        *Optional.* Name of host machine.
     host_cpus
-        (Optional) Number of CPUs on host machine.
+        *Optional.* Number of CPUs on host machine.
     host_mem
-        (Optional) Amount of memory on host machine.
+        *Optional.* Amount of memory on host machine.
     extras
-        (Optional) Additional calculation metadata.
+        *Optional.* Additional calculation metadata.
     """
 
     # - SQL Metadata ------------------
