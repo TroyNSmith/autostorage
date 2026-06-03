@@ -3,23 +3,24 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from qcdata import CalcType, DualProgramInput, Model, ProgramInput, ProgramOutput
+from qcdata import CalcType
 from sqlalchemy.types import JSON, String
 from sqlmodel import Column, Field, Relationship, SQLModel
 
 from ..calcn import Calculation
 from ..types import PathTypeDecorator, RowID
-from .optional import PartialMixin
+from .base import BaseRow
+from .links import CalculationGeometryLink, CalculationTrajectoryLink
 
 if TYPE_CHECKING:
     from .data import EnergyRow
-    from .geometry import GeometryRow
-    from .links import CalculationGeometryLink
     from .stationary import StationaryPointRow
+    from .trajectory import TrajectoryRow
 
 
-class CalculationRow(PartialMixin, Calculation, SQLModel, table=True):
-    """CalculationRow input parameters and metadata.
+class CalculationRow(BaseRow, Calculation, table=True):
+    """
+    CalculationRow input parameters.
 
     Attributes
     ----------
@@ -43,31 +44,18 @@ class CalculationRow(PartialMixin, Calculation, SQLModel, table=True):
         Computational method (B3LYP, MP2, ...)
     basis
         (Optional) Basis set.
-
-    SQLModel Relationships
-    ----------------------
-    provenance
+    [SQL] provenance
         Linked ProvenanceRow.
-    geometry_links
+    [SQL] geometry_links
         List of linked CalculationGeometryLinks allowing access to Role directly.
-    hashes
+    [SQL] hashes
         List of linked hashes.
-    energies
+    [SQL] energies
         List of linked energies.
-    stationary_points
+    [SQL] stationary_points
         List of linked stationary points.
-
-    Methods
-    -------
-    from_calculation
-        Convert Calculation to CalculationRow.
-    calculation
-        Convert CalculationRow to Calculation.
-    program_input
-        Convert CalculationRow to qcio program_input.
-    from_program_output
-        Convert qc ProgramOutput to CalculationRow.
-        Instantiates and links ProvenanceRow.
+    [SQL] trajectories
+        List of linked trajectories.
     """
 
     # - SQL Metadata ------------------
@@ -85,10 +73,8 @@ class CalculationRow(PartialMixin, Calculation, SQLModel, table=True):
     # - SQLModel relationships --------
     provenance: "ProvenanceRow" = Relationship(back_populates="calculation")
     geometry_links: list["CalculationGeometryLink"] = Relationship(
-        back_populates="calculation",
-        sa_relationship_kwargs={"overlaps": "geometries"},
-        cascade_delete=True,
-    )  # overlaps acknowledges that we have a circular relationship
+        back_populates="calculation"
+    )
     hashes: list["CalculationHashRow"] = Relationship(
         back_populates="calculation", cascade_delete=True
     )
@@ -97,6 +83,9 @@ class CalculationRow(PartialMixin, Calculation, SQLModel, table=True):
     )
     stationary_points: list["StationaryPointRow"] = Relationship(
         back_populates="calculation"
+    )
+    trajectories: list["TrajectoryRow"] = Relationship(
+        back_populates="calculation", link_model=CalculationTrajectoryLink
     )
 
     # - Methods -----------------------
@@ -116,112 +105,10 @@ class CalculationRow(PartialMixin, Calculation, SQLModel, table=True):
             calc_row.calc_type = calc_type
         return calc_row
 
-    def calculation(self) -> Calculation:
-        """
-        Instantiate Calculation from CalculationRow.
 
-        Returns
-        -------
-        Calculation
-        """
-        data = self.model_dump()
-
-        # Calculation doesn't care about id
-        if self.id:
-            del [data.id]  # ty:ignore[unresolved-attribute]
-
-        return Calculation(**data)
-
-    def program_input(
-        self, *, input_geo: "GeometryRow"
-    ) -> DualProgramInput | ProgramInput:
-        """
-        Generate qcdata ProgramInput from Calculation and input Geometry.
-
-        Parameters
-        ----------
-        input_geo
-            Input GeometryRow.
-
-        Returns
-        -------
-        qc DualProgramInput/ProgramInput
-        """
-        if self.super_program:
-            return DualProgramInput.model_validate(
-                {
-                    "calctype": self.calc_type,
-                    "structure": input_geo.structure(),
-                    "keywords": self.super_keywords,
-                    "subprogram": self.program,
-                    "subprogram_args": {
-                        "model": Model(method=self.method, basis=self.basis),
-                        "keywords": self.program_keywords,
-                        "cmdline_args": self.cmdline_args,
-                    },
-                }
-            )
-
-        return ProgramInput.model_validate(
-            {
-                "calctype": self.calc_type,
-                "structure": input_geo.structure(),
-                "model": Model(method=self.method, basis=self.basis),
-                "keywords": self.program_keywords,
-                "cmdline_args": self.cmdline_args,
-            }
-        )
-
-    @staticmethod
-    def from_program_output(prog_out: ProgramOutput) -> "CalculationRow":
-        """
-        Instantiate CalculationRow from qc ProgramOutput.
-
-        **Automatically instantiates and relates ProvenanceRow.
-
-        Parameters
-        ----------
-        prog_out
-            qccompute ProgramOutput.
-
-        Returns
-        -------
-        CalculationRow
-            Validated calculation row.
-        """
-        prog_inp = prog_out.input_data
-        provenance = prog_out.provenance
-
-        if isinstance(prog_inp, DualProgramInput):
-            data = {
-                "program": prog_inp.subprogram,
-                "program_keywords": prog_inp.subprogram_args.keywords,
-                "super_program": provenance.program,
-                "super_keywords": prog_inp.keywords,
-                "cmdline_args": prog_inp.subprogram_args.cmdline_args,
-                "calc_type": prog_inp.calctype.value,
-                "method": prog_inp.subprogram_args.model.method,
-                "basis": prog_inp.subprogram_args.model.basis,
-            }
-
-        else:
-            data = {
-                "program": provenance.program,
-                "program_keywords": prog_inp.keywords,
-                "cmdline_args": prog_inp.cmdline_args,
-                "calc_type": prog_inp.calctype.value,
-                "method": prog_inp.model.method,
-                "basis": prog_inp.model.basis,
-            }
-
-        calc_row = CalculationRow.model_validate(data)
-        calc_row.provenance = ProvenanceRow.from_program_output(prog_out)
-        return calc_row
-
-
-class ProvenanceRow(PartialMixin, SQLModel, table=True):
+class ProvenanceRow(BaseRow, table=True):
     """
-    CalculationRow output parameters and metadata.
+    CalculationRow metadata.
 
     Parameters
     ----------
@@ -245,6 +132,8 @@ class ProvenanceRow(PartialMixin, SQLModel, table=True):
         (Optional) Amount of memory on host machine.
     extras
         (Optional) Additional calculation metadata.
+    [SQL] calculation
+        Linked CalculationRow.
     """
 
     # - SQL Metadata ------------------
@@ -273,63 +162,8 @@ class ProvenanceRow(PartialMixin, SQLModel, table=True):
     # - SQLModel relationships --------
     calculation: CalculationRow = Relationship(back_populates="provenance")
 
-    @staticmethod
-    def from_program_output(prog_out: ProgramOutput) -> "ProvenanceRow":
-        """
-        Instantiate ProvenanceRow from qc ProgramOutput.
 
-        Parameters
-        ----------
-        prog_out
-            qccompute ProgramOutput.
-
-        Returns
-        -------
-        ProvenanceRow
-            Validated provenance row.
-        """
-        prog_inp = prog_out.input_data
-        provenance = prog_out.provenance
-        data = prog_out.data
-
-        if isinstance(prog_inp, DualProgramInput):
-            traj_prov = [t.provenance for t in data.trajectory]
-            data = {
-                "program_version": traj_prov[0].program_version,
-                "super_version": provenance.program_version,
-                "input": None,  # Could be used to store .inp (or equivalent) files
-                "files": {
-                    "program": prog_inp.subprogram_args.files,
-                    "super_program": prog_inp.files,
-                },
-                "scratch_dir": provenance.scratch_dir,
-                "wall_time": provenance.wall_time,
-                "host_name": provenance.hostname,
-                "host_cpus": provenance.hostcpus,
-                "host_mem": provenance.hostmem,
-                "extras": {
-                    "super_program": prog_inp.extras,
-                    "program": prog_inp.subprogram_args.extras,
-                },
-            }
-
-        else:
-            data = {
-                "program_version": provenance.program_version,
-                "input": None,  # Could be used to store .inp (or equivalent) files
-                "files": {"program": prog_inp.files},
-                "scratch_dir": provenance.scratch_dir,
-                "wall_time": provenance.wall_time,
-                "host_name": provenance.hostname,
-                "host_cpus": provenance.hostcpus,
-                "host_mem": provenance.hostmem,
-                "extras": {"program": prog_inp.extras},
-            }
-
-        return ProvenanceRow.model_validate(data)
-
-
-class CalculationHashRow(PartialMixin, SQLModel, table=True):
+class CalculationHashRow(SQLModel, table=True):
     """
     Hash value for a calculation for identification and deduplication.
 
@@ -341,10 +175,7 @@ class CalculationHashRow(PartialMixin, SQLModel, table=True):
         Type of hash (e.g., 'minimal', 'full').
     value
         The 64-character hash string.
-
-    SQLModel Relationships
-    ------------------------
-    calculation
+    [SQL] calculation
         The parent CalculationRow.
     """
 

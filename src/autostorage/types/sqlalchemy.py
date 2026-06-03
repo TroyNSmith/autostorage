@@ -6,10 +6,8 @@ from typing import TypeVar
 
 import numpy as np
 from sqlalchemy.types import JSON, String, TypeDecorator
-from sqlmodel import SQLModel
 
 # Model Type
-SQLModelT = TypeVar("SQLModelT", bound=SQLModel)
 AttrT = TypeVar("AttrT", float, str, dict, list)
 
 # Row ID Type Aliases

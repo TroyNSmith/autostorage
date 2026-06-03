@@ -2,12 +2,13 @@
 
 from typing import TYPE_CHECKING
 
+from automol import Identity
 from pydantic import ConfigDict
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship
 
 from ..types import RowID
+from .base import BaseRow
 from .links import StationaryIdentityLink, StationaryStageLink
-from .optional import PartialMixin
 
 if TYPE_CHECKING:
     from .calculation import CalculationRow
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from .reaction import StageRow
 
 
-class StationaryPointRow(PartialMixin, SQLModel, table=True):
+class StationaryPointRow(BaseRow, table=True):
     """
     Definition of a stationary point on a potential energy surface.
 
@@ -29,18 +30,15 @@ class StationaryPointRow(PartialMixin, SQLModel, table=True):
         Hessian index (0 for minima, 1 for saddle points).
     is_pseudo
         Flag for points that are not true stationary points (e.g., constrained).
-
-    SQLModel Relationships
-    ----------------------
-    geometry
+    [SQL] geometry
         GeometryRow defining the point's coordinates.
-    calculation
+    [SQL] calculation
         Parent CalculationRow.
-    identities
+    [SQL] identities
         List of chemical identifiers (InChI, etc.).
-    metrics
+    [SQL] metrics
         Comparison metrics (conformer analysis).
-    stages
+    [SQL] stages
         Reaction stages this stationary point belongs to.
     """
 
@@ -53,10 +51,10 @@ class StationaryPointRow(PartialMixin, SQLModel, table=True):
     geometry_id: RowID = Field(foreign_key="geometry.id", ondelete="CASCADE")
     calculation_id: RowID = Field(foreign_key="calculation.id", ondelete="CASCADE")
     # - Attributes --------------------
-    order: int
-    is_pseudo: bool
+    order: int = 0
+    is_pseudo: bool = False
     # - SQLModel relationships --------
-    geometry: "GeometryRow" = Relationship(back_populates="stationary_point")
+    geometry: "GeometryRow" = Relationship(back_populates="stationary_points")
     calculation: "CalculationRow" = Relationship(back_populates="stationary_points")
 
     identities: list["IdentityRow"] = Relationship(
@@ -70,22 +68,19 @@ class StationaryPointRow(PartialMixin, SQLModel, table=True):
     )
 
 
-class IdentityRow(PartialMixin, SQLModel, table=True):
+class IdentityRow(BaseRow, Identity, table=True):
     """
     Chemical identifiers for stationary points.
 
     Attributes
     ----------
-    type
+    kind
         Category of identity (e.g., 'stereoisomer', 'formula').
     algorithm
         The method used (e.g., 'InChI', 'SMILES').
     value
         The resulting string identifier.
-
-    SQLModel Relationships
-    ----------------------
-    stationary_points
+    [SQL] stationary_points
         Stationary points sharing this identity.
     """
 
@@ -95,16 +90,50 @@ class IdentityRow(PartialMixin, SQLModel, table=True):
     id: RowID | None = Field(default=None, primary_key=True)
     # - Foreign keys ------------------
     # - Attributes --------------------
-    type: str = Field(description="Category of the identity (stereoisomer, ...)")
-    algorithm: str = Field(description="Method used to determine identity (InChI, ...)")
-    value: str = Field(description="Value of the identity algorithm.")
     # - SQLModel relationships --------
     stationary_points: list["StationaryPointRow"] = Relationship(
         back_populates="identities", link_model=StationaryIdentityLink
     )
 
+    @staticmethod
+    def from_identity(ident: Identity) -> "IdentityRow":
+        """
+        Instantiate IdentityRow from Identity.
 
-class MetricRow(PartialMixin, SQLModel, table=True):
+        Returns
+        -------
+        IdentityRow
+        """
+        return IdentityRow(**ident.model_dump())
+
+
+class IdentityExtraRow(BaseRow, table=True):
+    """
+    Extra values to attach to stationary point identity entry.
+
+    Attributes
+    ----------
+    identity_id
+        Foreign key to the parent identity.
+    attribute
+        Label of extra.
+    value
+        Value of extra.
+    """
+
+    # - SQL Metadata ------------------
+    __tablename__ = "identity_extras"
+    # - Row id ------------------------
+    id: RowID | None = Field(default=None, primary_key=True)
+    # - Foreign keys ------------------
+    identity_id: int = Field(foreign_key="identity.id", ondelete="CASCADE")
+    # - Attributes --------------------
+    attribute: str
+    value: str
+    # - SQLModel relationships --------
+
+
+class MetricRow(BaseRow, table=True):
     """
     Metrics used for comparing and filtering conformers or stationary points.
 
@@ -118,10 +147,7 @@ class MetricRow(PartialMixin, SQLModel, table=True):
         Algorithm used (e.g., 'Kabsch').
     value
         The calculated metric value.
-
-    SQLModel Relationships
-    ----------------------
-    stationary_point
+    [SQL] stationary_point
         The parent StationaryPointRow.
     """
 

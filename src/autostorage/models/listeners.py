@@ -8,7 +8,7 @@ from ..calcn import calculation_hash, hash_registry
 from .calculation import CalculationHashRow, CalculationRow
 from .geometry import GeometryRow
 from .links import StationaryIdentityLink
-from .stationary import IdentityRow, StationaryPointRow
+from .stationary import IdentityExtraRow, IdentityRow, StationaryPointRow
 
 
 @event.listens_for(GeometryRow, "before_insert")
@@ -47,51 +47,57 @@ def populate_calculation_hashes(session, flush_context) -> None:  # noqa: ANN001
 
 
 @event.listens_for(StationaryPointRow, "after_insert")
-def stationary_inchi(mapper, connection, target: StationaryPointRow) -> None:  # noqa: ANN001, ARG001
-    """Automatically tags InChI and default metrics after inserting StationaryPoint."""
+def on_stationary_point_insert(mapper, connection, target: StationaryPointRow) -> None:  # noqa: ANN001, ARG001
+    """Auto-tag InChI identity after inserting a StationaryPoint."""
     session = Session(bind=connection)
-
-    if target.id is None:
-        msg = f"{target = } not assigned an id."
-        raise LookupError(msg)
-
     try:
-        # NOTE: If target.geometry isn't loaded, we need to fetch it
-        geom_stmt = select(GeometryRow).where(GeometryRow.id == target.geometry_id)
-        geom_row = session.exec(geom_stmt).first()
-
-        if not geom_row:
-            msg = (
-                f"{target.geometry_id} does not correspond to an entry in the database."
-            )
-            raise LookupError(msg)  # noqa: TRY301
-
-        inchi_string = geom.inchi(geom_row)
-
-        inchi_stmt = select(IdentityRow).where(
-            IdentityRow.algorithm == "InChI", IdentityRow.value == inchi_string
-        )
-        id_row = session.exec(inchi_stmt).first()
-
-        if id_row is None:
-            id_row = IdentityRow(
-                type="stereoisomer",
-                algorithm="InChI",
-                value=inchi_string,
-            )
-            session.add(id_row)
-            session.flush()
-
-        if id_row.id is None:
-            msg = f"{id_row = } not assigned an id."
-            raise LookupError(msg)  # noqa: TRY301
-
-        link = StationaryIdentityLink(stationary_id=target.id, identity_id=id_row.id)
-        session.add(link)
-
+        _attach_inchi(session, target)
         session.commit()
-
     except Exception as e:
         session.rollback()
-        msg = f"Failed to generate InChI {target.id}"
+        msg = f"Failed to generate InChI for StationaryPoint id={target.id!r}."
         raise RuntimeError(msg) from e
+
+
+def _attach_inchi(session: Session, target: StationaryPointRow) -> None:
+    """Compute and link an InChI identity with extra SMILES to a StationaryPointRow."""
+    if target.id is None:
+        msg = f"Row id failed to attach to {target = }."
+        raise ValueError(msg)
+
+    geo_row = session.get(GeometryRow, target.geometry_id)
+
+    if geo_row is None:
+        msg = f"GeometryRow not found for id={target.geometry_id}."
+        raise LookupError(msg)
+
+    inchi_row = IdentityRow.from_geometry(geo=geo_row, algorithm="rdkit inchi")
+    smiles_row = IdentityRow.from_geometry(geo=geo_row, algorithm="rdkit smiles")
+
+    existing_row = session.exec(
+        select(IdentityRow).where(
+            IdentityRow.algorithm == inchi_row.algorithm,
+            IdentityRow.value == inchi_row.value,
+        )
+    ).first()
+
+    if existing_row is None:
+        session.add(inchi_row)
+        session.flush()
+        existing_row = inchi_row
+
+    if existing_row.id is None:
+        msg = f"Row id failed to attach to {target = }."
+        raise ValueError(msg)
+
+    session.add(
+        StationaryIdentityLink(stationary_id=target.id, identity_id=existing_row.id)
+    )
+
+    session.add(
+        IdentityExtraRow(
+            identity_id=existing_row.id,
+            attribute=smiles_row.algorithm,
+            value=smiles_row.value,
+        )
+    )

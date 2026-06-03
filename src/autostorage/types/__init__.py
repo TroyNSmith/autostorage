@@ -1,13 +1,12 @@
 """Types."""
 
-from .fields import Role
+from .enums import Role
 from .sqlalchemy import (
     AttrT,
     FloatArrayTypeDecorator,
     PathTypeDecorator,
     RowID,
     RowIDs,
-    SQLModelT,
 )
 
 __all__ = [
@@ -17,5 +16,4 @@ __all__ = [
     "PathTypeDecorator",
     "RowID",
     "RowIDs",
-    "SQLModelT",
 ]

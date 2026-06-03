@@ -1,15 +1,15 @@
 """Data models."""
 
 from pydantic import ConfigDict
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship
 
 from ..types import RowID
+from .base import BaseRow
 from .calculation import CalculationRow
 from .geometry import GeometryRow
-from .optional import PartialMixin
 
 
-class EnergyRow(PartialMixin, SQLModel, table=True):
+class EnergyRow(BaseRow, table=True):
     """
     Results of an energy calculation for a specific geometry.
 
@@ -21,12 +21,9 @@ class EnergyRow(PartialMixin, SQLModel, table=True):
         Foreign key to the calculation that produced this energy.
     value
         Energy value in Hartree.
-
-    SQLModel Relationships
-    -----------------------
-    geometry
+    [SQL] geometry
         GeometryRow defining the point's coordinates.
-    calculation
+    [SQL] calculation
         Parent CalculationRow.
     """
 

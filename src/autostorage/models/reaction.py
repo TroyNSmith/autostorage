@@ -2,17 +2,17 @@
 
 from typing import TYPE_CHECKING
 
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship
 
 from ..types import RowID
+from .base import BaseRow
 from .links import StationaryStageLink
-from .optional import PartialMixin
 
 if TYPE_CHECKING:
     from .stationary import StationaryPointRow
 
 
-class StageRow(PartialMixin, SQLModel, table=True):
+class StageRow(BaseRow, table=True):
     """
     A specific chemical state (reactant, product, or TS) in a reaction.
 
@@ -20,16 +20,11 @@ class StageRow(PartialMixin, SQLModel, table=True):
     ----------
     is_ts
         Whether this stage represents a transition state.
-
-    SQLModel Relationships
-    ----------------------
-    steps_1, steps_2
+    [SQL] steps_1, steps_2
         Connection to StepRows where this stage is a reactant or product.
-    steps_ts
+    [SQL] steps_ts
         Connection to StepRows where this stage is the transition state.
-    Linked Rows
-    -----------
-    stationary_points
+    [SQL] stationary_points
         Geometries mapped to this reaction stage.
     """
 
@@ -59,7 +54,7 @@ class StageRow(PartialMixin, SQLModel, table=True):
 
 
 # --- Stage Models ------------------------------
-class StepRow(PartialMixin, SQLModel, table=True):
+class StepRow(BaseRow, table=True):
     """
     An elementary reaction step connecting multiple stages.
 
@@ -73,10 +68,7 @@ class StepRow(PartialMixin, SQLModel, table=True):
         Foreign key to the transition state stage.
     is_barrierless
         Flag for reactions without a formal transition state.
-
-    SQLModel Relationships
-    ----------------------
-    stage1, stage2, stage_ts
+    [SQL] stage1, stage2, stage_ts
         The specific StageRows linked by this step.
     """
 
