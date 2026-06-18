@@ -2,7 +2,16 @@
 
 __version__ = "0.0.8"
 
-from . import database, models, read, select, utils
+from . import database, models, select, utils
 from .database import Database
 
-__all__ = ["Database", "database", "iterator", "models", "read", "select", "utils"]
+__all__ = [
+    "Database",
+    "calculate",
+    "database",
+    "iterator",
+    "models",
+    "query",
+    "select",
+    "utils",
+]
