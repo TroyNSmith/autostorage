@@ -1,5 +1,5 @@
-"""Convenience methods."""
+"""Autostorage utilities."""
 
-from . import types
+from . import exc, types
 
-__all__ = ["types"]
+__all__ = ["exc", "types"]

@@ -228,3 +228,6 @@ __marimo__/
 
 # pixi build
 *.conda
+
+# databases generated from examples
+*.db

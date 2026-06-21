@@ -16,7 +16,7 @@ from autostorage.database import (
     StationaryPointRow,
     StepRow,
     TrajectoryRow,
-    ValidationRow,
+    StepValidationRow,
 )
 from autostorage.query import first_match, geometry_match, one_match
 
@@ -171,7 +171,7 @@ if irc_calc.id is None:
         backward_stage=stage_b, transition_stage=stage_ts, forward_stage=stage_f
     )
     step = first_match(db, step) or step
-    step.validations.append(ValidationRow(method="irc", calculation=irc_calc))
+    step.validations.append(StepValidationRow(method="irc", calculation=irc_calc))
 
     db.add(step)
 
