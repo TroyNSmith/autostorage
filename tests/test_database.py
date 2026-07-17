@@ -1,72 +1,50 @@
 """Test for database module."""
 
-from collections.abc import Iterator
-
 import pytest
-from sqlalchemy.exc import IntegrityError, NoResultFound
+from numpy.random import Generator
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
 
-from autostorage import Database, select
-from autostorage.database import ModelRow
-
-
-@pytest.fixture
-def database() -> Iterator[Database]:
-    """In-memory database fixture."""
-    db = Database(":memory:")
-
-    try:
-        yield db
-
-    finally:
-        db.close()
+from autostorage import (
+    CalculationGeometryLink,
+    CalculationRow,
+    Database,
+    GeometryRow,
+    GradientRow,
+)
+from autostorage.database import ModelRow, Select, SelectStatement
+from autostorage.exc import ResultShapeError
 
 
-@pytest.fixture
-def model() -> ModelRow:
-    """Fixture for ModelRow."""
-    return ModelRow(
-        program="ORCA",
-        program_version="6.1.1",
-        calc_type="test",
-        method="b3lyp",
-        basis="def2-SVP",
-    )
-
-
-def test__add(database: Database, model: ModelRow) -> None:
+def test__add(database: Database, model_row: ModelRow) -> None:
     """Test add to database."""
-    database.add(model)
+    database.add(model_row)
+    database.commit()
 
-    assert model.id
+    assert model_row.id
 
 
-def test__invalid_add(database: Database, model: ModelRow) -> None:
+def test__invalid_add(database: Database, model_row: ModelRow) -> None:
     """Test invalid add to database."""
-    model.program = None  # ty:ignore[invalid-assignment]
+    model_row2 = model_row.model_copy(deep=True)
+
+    database.add(model_row)
+    database.commit()
+
+    # Violate ModelRow's (program, program_version, method, basis) unique constraint
+    database.add(model_row2)
     with pytest.raises(IntegrityError):
-        database.add(model)
+        database.commit()
 
 
-def test__delete(database: Database, model: ModelRow) -> None:
-    """Test delete from database."""
-    database.add(model)
-    stmt = select.matching_rows(model)
-    match = database.exec_one(stmt)
-    assert match
-
-    database.delete(model)
-    stmt = select.matching_rows(model)
-    with pytest.raises(NoResultFound):
-        match = database.exec_one(stmt)
-
-
-def test__get(database: Database, model: ModelRow) -> None:
+def test__get(database: Database, model_row: ModelRow) -> None:
     """Test get from database."""
-    database.add(model)
-    assert model.id
+    database.add(model_row)
+    database.commit()
+    assert model_row.id
 
-    match = database.get(ModelRow, model.id)
-    assert match == model
+    match = database.get(ModelRow, model_row.id)
+    assert match == model_row
 
 
 def test__invalid_get(database: Database) -> None:
@@ -75,33 +53,127 @@ def test__invalid_get(database: Database) -> None:
         database.get(ModelRow, 679)
 
 
-def test__exec_first(database: Database, model: ModelRow) -> None:
+def test__delete(database: Database, model_row: ModelRow) -> None:
+    """Test delete from database."""
+    database.add(model_row)
+    database.commit()
+    assert model_row.id
+
+    database.delete(model_row)
+    database.commit()
+    with pytest.raises(LookupError, match=r"with row_id = 1 not found."):
+        database.get(ModelRow, model_row.id)
+
+
+@pytest.fixture
+def orca_model_statement() -> SelectStatement:
+    """Fixture for Statement."""
+    return Select(ModelRow).where(ModelRow.program == "ORCA")
+
+
+def test__exec_first(
+    database: Database,
+    model_row: ModelRow,
+    orca_model_statement: SelectStatement,
+) -> None:
     """Test exec first from database."""
-    database.add(model)
-    stmt = select.matching_rows(model)
-    match = database.exec_first(stmt)
+    database.add(model_row)
+    match = database.exec_first(orca_model_statement)
     assert match
 
 
-def test__exec_one(database: Database, model: ModelRow) -> None:
+def test__exec_one(
+    database: Database, model_row: ModelRow, orca_model_statement: SelectStatement
+) -> None:
     """Test exec one from database."""
-    database.add(model)
-    stmt = select.matching_rows(model)
-    match = database.exec_one(stmt)
+    database.add(model_row)
+    match = database.exec_one(orca_model_statement)
     assert match
 
 
-def test__invalid_exec_one(database: Database, model: ModelRow) -> None:
+def test__invalid_exec_one(
+    database: Database, orca_model_statement: SelectStatement
+) -> None:
     """Test delete and invalid exec one from database."""
-    stmt = select.matching_rows(model)
-    with pytest.raises(NoResultFound):
-        database.exec_one(stmt)
+    with pytest.raises(LookupError):
+        database.exec_one(orca_model_statement)
 
 
-def test__exec_all(database: Database, model: ModelRow) -> None:
+def test__exec_all(
+    database: Database, model_row: ModelRow, orca_model_statement: SelectStatement
+) -> None:
     """Test exec all from database."""
-    database.add(model)
-    partial = ModelRow.partial()
-    stmt = select.matching_rows(partial)
-    for match in database.exec_all(stmt):
-        assert match == model
+    database.add(model_row)
+    for match in database.exec_all(orca_model_statement):
+        assert match
+
+
+def test__select_statement_chaining(database: Database, model_row: ModelRow) -> None:
+    """Test that native SQLModel statement chaining works through exec_*."""
+    database.add(model_row)
+    database.commit()
+
+    stmt = select(ModelRow).where(ModelRow.program == "ORCA")
+    assert database.exec_first(stmt) == model_row
+    assert database.exec_one(stmt) == model_row
+    assert list(database.exec_all(stmt))
+
+    missing_stmt = select(ModelRow).where(ModelRow.program == "nonexistent")
+    assert database.exec_first(missing_stmt) is None
+
+
+def test__select_statement_offset_and_distinct(database: Database) -> None:
+    """Test offset and distinct on a plain select() statement."""
+    rows = [
+        ModelRow(program="ORCA", method="b3lyp", basis=f"basis{i}") for i in range(3)
+    ]
+    for row in rows:
+        database.add(row)
+    database.commit()
+
+    ordered_stmt = select(ModelRow).order_by(ModelRow.basis).offset(1)
+    ordered = list(database.exec_all(ordered_stmt))
+    assert [r.basis for r in ordered] == ["basis1", "basis2"]
+
+    distinct_stmt = select(ModelRow).distinct()
+    programs = list(database.exec_all(distinct_stmt))
+    assert {p.program for p in programs} == {"ORCA"}
+
+
+def test__merge_commits(database: Database, model_row: ModelRow) -> None:
+    """Test that merge() (and therefore BaseRow.save()) commits immediately."""
+    merged = model_row.save(database)
+    assert merged.id
+
+    # A rollback after save() must not undo it, since merge() already committed.
+    database._session.rollback()  # noqa: SLF001
+    assert database.get(ModelRow, merged.id) == merged
+
+
+def test__session_rolls_back_on_generic_error(
+    database: Database,
+    calculation_row: CalculationRow,
+    geometry_row: GeometryRow,
+    calc_geo_link: CalculationGeometryLink,
+    rng: Generator,
+) -> None:
+    """A non-IntegrityError failure rolls back, leaving the session usable."""
+    database.add(calculation_row)
+    database.add(geometry_row)
+    database.add(calc_geo_link)
+    database.add(
+        GradientRow(
+            calculation=calculation_row,
+            geometry=geometry_row,
+            value=rng.uniform(size=2),
+        )
+    )
+
+    with pytest.raises(ResultShapeError):
+        database.commit()
+
+    # The session must still be usable for subsequent, unrelated operations.
+    unrelated = ModelRow(program="ORCA", method="b3lyp")
+    database.add(unrelated)
+    database.commit()
+    assert unrelated.id
