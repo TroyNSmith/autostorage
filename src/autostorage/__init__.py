@@ -2,8 +2,9 @@
 
 __version__ = "0.0.10"
 
-from . import exc, types, utils
+from . import exc, merge, types, utils
 from .database import Database
+from .merge import MergeReport
 from .models import (
     CalculationGeometryLink,
     CalculationRow,
@@ -34,6 +35,7 @@ __all__ = [
     "HessianRow",
     "IdentityExtraRow",
     "IdentityRow",
+    "MergeReport",
     "ModelRow",
     "Role",
     "StageRow",
@@ -42,6 +44,7 @@ __all__ = [
     "TrajectoryRow",
     "ValidationRow",
     "exc",
+    "merge",
     "types",
     "utils",
 ]

@@ -5,7 +5,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Self, dataclass_transform
 
 import numpy as np
-from automol import Geometry, Identity, geom
+from automol import Algorithm, Geometry, Identity, geom
 from automol.utils.types import FloatArray
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
@@ -557,6 +557,43 @@ class IdentityRow(BaseRow, Identity, table=True):
     )
     identity_extras: list["IdentityExtraRow"] = Relationship(back_populates="identity")
 
+    @classmethod
+    def find_or_create(
+        cls,
+        db: "Database",
+        *,
+        algorithm: Algorithm,
+        value: str,
+        commit: bool = True,
+    ) -> Self:
+        """Return the matching identity row, creating and saving one if absent.
+
+        `kind` isn't a parameter here since it's fully determined by
+        `algorithm` (see `Identity.from_value`), so matching on
+        `(algorithm, value)` is equivalent to `unique_identity`'s full
+        `(kind, algorithm, value)` constraint.
+
+        Parameters
+        ----------
+        commit, optional
+            If True (default), commit a newly-created row immediately. If
+            False, only flush it (still assigns `.id`), leaving the caller's
+            transaction open — for a caller staging several dedup lookups
+            that must succeed or fail together.
+        """
+        stmt = select(cls).where(cls.algorithm == algorithm, cls.value == value)
+        existing = db.exec_first(stmt)
+        if existing is not None:
+            return existing
+
+        row = cls.from_value(value, algorithm=algorithm)
+        db.add(row)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        return row
+
 
 class IdentityExtraRow(BaseRow, table=True):
     """Additional key-value metadata attached to a chemical identity.
@@ -865,7 +902,7 @@ class ModelRow(BaseRow, table=True):
     basis: str | None = None
 
     @classmethod
-    def find_or_create(
+    def find_or_create(  # noqa: PLR0913
         cls,
         db: "Database",
         *,
@@ -873,6 +910,7 @@ class ModelRow(BaseRow, table=True):
         method: str,
         program_version: str | None = None,
         basis: str | None = None,
+        commit: bool = True,
     ) -> Self:
         """Return the matching model row, creating and saving one if absent.
 
@@ -881,6 +919,14 @@ class ModelRow(BaseRow, table=True):
         in unique constraints. Callers that don't always supply both should
         use this instead of constructing and adding a ``ModelRow`` directly,
         to avoid silently accumulating duplicate rows for the same model.
+
+        Parameters
+        ----------
+        commit, optional
+            If True (default), commit a newly-created row immediately. If
+            False, only flush it (still assigns `.id`), leaving the caller's
+            transaction open — for a caller staging several dedup lookups
+            that must succeed or fail together.
         """
         stmt = select(cls).where(
             cls.program == program,
@@ -899,7 +945,10 @@ class ModelRow(BaseRow, table=True):
             basis=basis,
         )
         db.add(row)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return row
 
 

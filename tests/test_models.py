@@ -924,6 +924,43 @@ def test__conformer_identity_merge_on_duplicate_geometry(
     assert conformer1.id == conformer2.id
 
 
+def test__conformer_identity_merge_with_unattached_geometry_ids(
+    database: Database,
+    calculation_row: CalculationRow,
+    geometry_row: GeometryRow,
+    rng: Generator,
+) -> None:
+    """Test conformer dedup when peers are built with only `geometry_id` set.
+
+    Regression test: `_matching_conformer_identity` must resolve each InChI
+    peer's geometry the same way it resolves the target row's own geometry
+    (via the session, for a row with only `geometry_id` set), rather than
+    reading a peer's `.geometry` relationship directly, which stays
+    unpopulated until the ORM syncs it — as is the case for rows built by a
+    bulk loader like a database merge rather than via `.geometry=`.
+    """
+    duplicate_geometry = _jittered_copy(geometry_row, rng)
+
+    database.add(calculation_row)
+    database.add(geometry_row)
+    database.add(duplicate_geometry)
+    database.flush()
+
+    stationary1 = StationaryPointRow(
+        calculation_id=calculation_row.id, geometry_id=geometry_row.id
+    )
+    stationary2 = StationaryPointRow(
+        calculation_id=calculation_row.id, geometry_id=duplicate_geometry.id
+    )
+    database.add(stationary1)
+    database.add(stationary2)
+    database.commit()
+
+    conformer1 = next(i for i in stationary1.identities if i.kind == "conformer")
+    conformer2 = next(i for i in stationary2.identities if i.kind == "conformer")
+    assert conformer1.id == conformer2.id
+
+
 def test__conformer_identity_split_on_distinct_conformer(
     database: Database, calculation_row: CalculationRow
 ) -> None:

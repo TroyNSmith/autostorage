@@ -65,6 +65,7 @@ type = "layers"
 layers = [
     "autostorage.utils",
     "autostorage.database",
+    "autostorage.merge",
     "autostorage.events",
     "autostorage.models",
     "autostorage.types | autostorage.exc",

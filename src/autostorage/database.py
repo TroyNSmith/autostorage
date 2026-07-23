@@ -16,6 +16,7 @@ from sqlmodel.sql.expression import Select, SelectOfScalar
 
 # Ensure all modules are loaded with the database
 from .events import *  # noqa: F403
+from .merge import MergeReport, merge_databases
 from .models import *  # noqa: F403
 
 type SelectStatement[T] = Select[T] | SelectOfScalar[T]
@@ -132,6 +133,19 @@ class Database:
             merged = session.merge(row)
             session.commit()
             return merged
+
+    def merge_from(self, source_db: "Database", *, commit: bool = True) -> MergeReport:
+        """Merge another database's contents into this one.
+
+        Unlike `merge()` (a same-session upsert of a single row), this
+        copies every row from a separate `source_db` into this database,
+        remapping ids/foreign keys and deduplicating content-unique rows.
+
+        See Also
+        --------
+        autostorage.merge
+        """
+        return merge_databases(target=self, source=source_db, commit=commit)
 
     def flush(self) -> None:
         """Flush pending changes to the database without committing.
