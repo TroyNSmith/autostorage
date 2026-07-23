@@ -7,6 +7,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **`ModelRow.find_or_create`**: Look up a matching model row by content before creating one. `unique_model` doesn't catch duplicates when `program_version` or `basis` is `NULL`, since SQL treats `NULL` as distinct from itself in unique constraints — callers constructing and saving a fresh `ModelRow` each time (without both fields set) were silently accumulating duplicate rows for the same logical model, which broke downstream lookups keyed on `model_id`.
+- **`StageRow.find_or_create`, `StepRow.find_or_create`**: Same pattern as `ModelRow.find_or_create`, for stages and steps.
+- **`BaseLink.create(*rows, **attrs)`**: Construct a link row by matching each positional row to its relationship by type (e.g. `CalculationGeometryLink.create(calc, geo, role=Role.INPUT)`), replacing the removed per-row `*_link()` wrapper methods below.
+- **`TimestampMixin`**: Adds server-managed `created_at`/`updated_at` columns to every `BaseRow` subclass.
+- **`CalcStatus`**: Lifecycle status enum (`PENDING`/`RUNNING`/`SUCCEEDED`/`FAILED`) for a new `CalculationRow.status` column (default `PENDING`), paired with a new `CalculationRow.error_message` column.
+- **`CompressedArrayTypeDecorator`**: Stores NumPy arrays as zlib-compressed `.npy` binary data, preserving shape and dtype for arrays of any dimensionality. Replaces `FloatArrayTypeDecorator`/`Float32BytesTypeDecorator` on `GeometryRow.coordinates`, `GradientRow.value`, and `HessianRow.value` — the latter previously stored a flattened, shapeless raw float32 buffer.
+- **`StationaryPointRow.identity(kind=..., algorithm=...)`**: Return the first already-loaded identity matching kind and/or algorithm.
+- **`CalculationRow.input_geometries`, `.output_geometries`, `.input_trajectories`, `.output_trajectories`**: Properties filtering linked geometries/trajectories by `Role`.
+- **`Database.add_all()`**: Bulk counterpart to `add()`.
+- **`Database.get_or_none()`**: Like `get()`, but returns `None` on a miss instead of raising.
+- **`Database.exists()`**: Check whether any row matches a statement via a single `EXISTS` subquery, without materializing a match.
+- **`Database.__enter__`/`__exit__`**: Support `with Database(...) as db:`; rolls back the session on an exception before closing.
+- **`IdentityRow.unique_identity`**: Unique constraint on `(kind, algorithm, value)`.
+- **Reverse-lookup and FK indexes**: Added to the trailing column of every composite-PK link table, to `ModelRow`/`StepRow` (null-safe unique indexes, since their existing unique constraints don't catch duplicates where a nullable column differs only by `NULL`), and to previously-unindexed foreign keys (`CalculationRow.model_id`, and `geometry_id`/`calculation_id` on `EnergyRow`, `GradientRow`, `HessianRow`, `StationaryPointRow`, `ValidationRow`).
+- **Event listeners**: `verify_geometry_immutable_fields` (rejects changes to `GeometryRow.symbols`/`.coordinates` after insert), `verify_stage_ts_consistency` (validates a `StepRow`'s stages agree with it on transition-state status), `revalidate_geometry_orders_on_hessian_delete` (keeps `StationaryPointRow.is_valid` correct when the Hessian establishing order consensus is deleted).
+- **Alembic migrations** (`migrations/`, `alembic.ini`, `pixi run migrate`): Evolve an existing on-disk database's schema in place, targeted via `AUTOSTORAGE_DATABASE_URL`; fresh/in-memory `Database` instances (including tests) are unaffected, still built via `create_all()`.
+
+### Changed
+
+- **`Database` engine**: JSON columns now serialize with sorted keys, so equality filters on JSON columns (e.g. `CalculationRow.input_provenance == prov`) match regardless of the dict's key insertion order.
+- **`Database.exec_all()`**: Now returns a `list` instead of a lazy iterator.
+- **`Database.flush()`**: Also expires all session objects, so an already-loaded object whose row was removed by a DB-level `ondelete="CASCADE"` during the flush reloads (or raises) on next access instead of reading back stale.
+- **`Role` enum columns** (`CalculationGeometryLink.role`, `CalculationTrajectoryLink.role`): Store the enum's `.value` instead of its member name.
+- **`ValidationRow.calculation_id`**: Now `NOT NULL` and indexed.
+
+### Fixed
+
+- **`Database`**: `PRAGMA foreign_mode=DELETE` (not a valid SQLite pragma) corrected to `PRAGMA journal_mode=DELETE`, the intended WAL-mode fallback.
+- **`GradientRow`/`HessianRow` shape validation, `StationaryPointRow`/`HessianRow` order validation, `StepRow` stage-consistency validation**: Now resolve the target's relationship via the session when only the FK id was set (not the relationship itself), so validation is no longer silently skipped in that case.
+- **`ValidationRow`**: Removed a duplicate explicit `id` field that shadowed the one already provided by `BaseRow`.
 
 ### Removed
 
