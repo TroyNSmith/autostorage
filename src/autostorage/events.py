@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapper, object_session
 from sqlalchemy.orm.attributes import get_history
 from sqlmodel import Integer, Session, cast, func, select
 
-from .exc import ResultShapeError
+from .exc import DataIntegrityError, ResultShapeError
 from .models import (
     GeometryRow,
     GradientRow,
@@ -29,9 +29,7 @@ def _resolve_geometry(
 ) -> GeometryRow | None:
     """Return the target's geometry, resolving it via the session if unattached.
 
-    Setting only `geometry_id` (without `.geometry`) leaves the relationship
-    unpopulated until the ORM syncs it, which would otherwise let shape/order
-    validation be skipped for a row that does have a geometry.
+    Setting only `geometry_id` leaves `.geometry` unpopulated until the ORM syncs it.
     """
     geometry = target.geometry
     if geometry is None and target.geometry_id is not None:
@@ -86,13 +84,7 @@ def invalidate_hessian_frequency_cache(
     connection: Connection,  # noqa: ARG001
     target: HessianRow,
 ) -> None:
-    """Drop a cached `harmonic_frequencies` if `value` changed.
-
-    `HessianRow.harmonic_frequencies` is a `functools.cached_property`; an
-    in-place update to `value` after it's already been read once would
-    otherwise keep returning the stale, pre-update frequencies (and
-    `.order`) for the rest of this Python object's lifetime.
-    """
+    """Drop a cached `harmonic_frequencies` if `value` changed."""
     if get_history(target, "value").added:
         target.__dict__.pop("harmonic_frequencies", None)
 
@@ -102,17 +94,8 @@ def _recompute_geometry_stationary_validity(
 ) -> None:
     """Recompute `StationaryPointRow.is_valid` for a geometry from its Hessians.
 
-    Shared by the insert/update/delete listeners so order-consensus is
-    recomputed identically regardless of which change triggered it.
-
-    Parameters
-    ----------
-    geometry
-        Geometry whose Hessians and stationary points to reconcile.
-    excluding, optional
-        Hessian rows to leave out of consensus (e.g. ones pending deletion —
-        `geometry.hessians` still contains them at `before_flush` time,
-        since the DELETE hasn't been issued yet).
+    `excluding` skips Hessians pending deletion (still in `geometry.hessians` at
+    `before_flush` time since the DELETE hasn't been issued yet).
     """
     excluded_ids = {id(h) for h in excluding}
     hessians = [h for h in geometry.hessians if id(h) not in excluded_ids]
@@ -122,7 +105,7 @@ def _recompute_geometry_stationary_validity(
     orders = {h.order for h in hessians if h.order is not None}
     if len(orders) > 1:
         msg = f"Geometry Hessians do not agree on order. {orders = }."
-        raise ValueError(msg)
+        raise DataIntegrityError(msg)
 
     if orders and geometry.stationary_points:
         expected_order = orders.pop()
@@ -154,18 +137,8 @@ def revalidate_geometry_orders_on_hessian_delete(
 ) -> None:
     """Recompute order consensus for a geometry when one of its Hessians is deleted.
 
-    `validate_geometry_orders` only runs on Hessian insert/update, so
-    `StationaryPointRow.is_valid` flags could go stale after the Hessian
-    that established consensus order is removed; this closes that gap.
-
-    Note
-    ----
-    Implemented as a session-level `before_flush` listener, not a
-    mapper-level `before_delete` one: SQLAlchemy silently drops attribute
-    changes made to *other*, already-clean objects from within mapper-level
-    delete events (they aren't part of that object's already-computed flush
-    plan) — the same reason `add_inchi_identities`/`assign_conformer_ids`
-    below are `before_flush` listeners rather than mapper-level ones.
+    `validate_geometry_orders` only runs on insert/update, so this covers the gap
+    where `is_valid` could go stale after a Hessian is removed.
     """
     deleted_hessians = [obj for obj in session.deleted if isinstance(obj, HessianRow)]
     if not deleted_hessians:
@@ -188,22 +161,18 @@ def verify_geometry_immutable_fields(
 ) -> None:
     """Reject changes to `symbols`/`coordinates` on an already-persisted geometry.
 
-    `charge`/`spin` remain mutable; only the fields defining the geometry's
-    identity are locked once inserted. Without this, an in-place edit to an
-    already-persisted geometry would silently invalidate any Gradient/Hessian
-    shape checks already run against it.
+    Otherwise an in-place edit could invalidate Gradient/Hessian shape checks
+    already run against it.
     """
     for attr in _IMMUTABLE_GEOMETRY_FIELDS:
         history = get_history(target, attr)
         if history.added or history.deleted:
             msg = f"GeometryRow.{attr} cannot be changed after insert."
-            raise ValueError(msg)
+            raise DataIntegrityError(msg)
 
 
-# Identity algorithms that `add_inchi_identities`/`assign_conformer_ids` below
-# populate automatically for every new `StationaryPointRow`. Exposed so other
-# code (e.g. `autostorage.merge`) can tell which identities will be
-# regenerated by these listeners and shouldn't be copied/attached explicitly.
+# Identity algorithms managed here, so other code (e.g. `merge.py`) knows not to
+# copy/attach them explicitly.
 AUTO_MANAGED_IDENTITY_ALGORITHMS: frozenset[Algorithm] = frozenset(
     {Algorithm.RDKIT_INCHI, Algorithm.IRMSD}
 )
@@ -223,8 +192,7 @@ def add_inchi_identities(session: Session, flush_context: Any, instances: Any) -
             continue
         try:
             inchi = IdentityRow.from_geometry(
-                geo=geometry,
-                algorithm=Algorithm.RDKIT_INCHI,
+                geo=geometry, algorithm=Algorithm.RDKIT_INCHI
             )
             pending_items.append((obj, inchi, geometry))
             inchi_lookups.append((inchi.algorithm, inchi.value))
@@ -269,7 +237,7 @@ def add_inchi_identities(session: Session, flush_context: Any, instances: Any) -
 def _matching_conformer_identity(
     obj: StationaryPointRow, inchi: IdentityRow
 ) -> IdentityRow | None:
-    """Find the conformer identity of a geometric duplicate among InChI peers."""
+    """Find the conformer identity of a geometric duplicate among InChI matches."""
     peers = [c for c in inchi.stationary_points if c is not obj]
     if not peers:
         return None
@@ -278,10 +246,7 @@ def _matching_conformer_identity(
     if geometry is None:
         return None
 
-    # Peers may be rows built with only `geometry_id` set (e.g. by a bulk
-    # loader), leaving `.geometry` unpopulated until the ORM syncs it; resolve
-    # each one the same way as `obj`'s own geometry instead of reading the
-    # raw, possibly-`None` attribute.
+    # Peers may have only `geometry_id` set (e.g. a bulk loader); resolve via session.
     resolved_peers = [(c, _resolve_geometry(c)) for c in peers]
     resolved_peers = [(c, g) for c, g in resolved_peers if g is not None]
     if not resolved_peers:
@@ -324,11 +289,8 @@ def assign_conformer_ids(session: Session, flush_context: Any, instances: Any) -
             continue
 
         if next_group_id is None:
-            # Assumes single-writer semantics, consistent with Database's
-            # documented non-thread-safety. If that's violated, IdentityRow's
-            # unique_identity constraint (kind, algorithm, value) turns a
-            # racing duplicate group id into an IntegrityError at commit
-            # rather than a silently merged conformer group.
+            # Assumes single-writer; concurrent writers rely on the DB's uniqueness
+            # constraint to fail one session's commit instead.
             current_max = session.exec(
                 select(func.max(cast(IdentityRow.value, Integer))).where(
                     IdentityRow.kind == Algorithm.IRMSD.kind
@@ -357,7 +319,7 @@ def verify_stage_order_and_barrierless(
 
     if not stg_id1 or not stg_id2:
         msg = "Cannot sort stage IDs; IDs aren't assigned to stages."
-        raise ValueError(msg)
+        raise DataIntegrityError(msg)
 
     if stg_id1 > stg_id2:
         target.stage_id1, target.stage_id2 = stg_id2, stg_id1
@@ -368,10 +330,7 @@ def verify_stage_order_and_barrierless(
 def _resolve_stage(target: StepRow, id_attr: str, rel_attr: str) -> StageRow | None:
     """Return one of a `StepRow`'s stages, resolving via session if unattached.
 
-    Mirrors `_resolve_geometry`: setting only the FK id (e.g. `stage_id_ts`)
-    without the relationship (`stage_ts`) leaves it unpopulated until the ORM
-    syncs it, which would otherwise let this check be skipped for a step
-    that does have a linked stage.
+    Mirrors `_resolve_geometry`.
     """
     stage = getattr(target, rel_attr)
     if stage is None:
@@ -392,8 +351,8 @@ def verify_stage_ts_consistency(
 ) -> None:
     """Verify `is_ts` agreement between a `StepRow` and its linked stages.
 
-    `stage1`/`stage2` must not be transition-state stages; when
-    `stage_id_ts` is set, the referenced stage must be one.
+    `stage1`/`stage2` must not be transition-state stages. When `stage_id_ts` is set,
+    the referenced stage must be one.
     """
     stage1 = _resolve_stage(target, "stage_id1", "stage1")
     stage2 = _resolve_stage(target, "stage_id2", "stage2")
@@ -401,7 +360,7 @@ def verify_stage_ts_consistency(
 
     if (stage1 is not None and stage1.is_ts) or (stage2 is not None and stage2.is_ts):
         msg = "Step's stage1/stage2 cannot be a transition-state stage."
-        raise ValueError(msg)
+        raise DataIntegrityError(msg)
     if stage_ts is not None and not stage_ts.is_ts:
         msg = "Step's stage_ts must reference a transition-state stage."
-        raise ValueError(msg)
+        raise DataIntegrityError(msg)

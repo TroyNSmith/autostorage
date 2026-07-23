@@ -28,7 +28,7 @@ from autostorage import (
     TrajectoryRow,
     ValidationRow,
 )
-from autostorage.exc import MissingPrimaryKeyError, ResultShapeError
+from autostorage.exc import DataIntegrityError, MissingPrimaryKeyError, ResultShapeError
 from autostorage.models import CalculationTrajectoryLink
 from autostorage.types import Role
 
@@ -288,7 +288,7 @@ def test__geometry_symbols_immutable_after_insert(
 
     geometry_row.symbols = ["H", "O", "O"]
     database.add(geometry_row)
-    with pytest.raises(ValueError, match="symbols"):
+    with pytest.raises(DataIntegrityError, match="symbols"):
         database.commit()
 
 
@@ -301,7 +301,7 @@ def test__geometry_coordinates_immutable_after_insert(
 
     geometry_row.coordinates = np.array(geometry_row.coordinates) + 0.1
     database.add(geometry_row)
-    with pytest.raises(ValueError, match="coordinates"):
+    with pytest.raises(DataIntegrityError, match="coordinates"):
         database.commit()
 
 
@@ -818,7 +818,7 @@ def test__step_rejects_ts_stage_as_stage1_or_stage2(
     database.commit()
 
     database.add(StepRow(stage1=stage_ts, stage2=stage2))
-    with pytest.raises(ValueError, match="transition-state"):
+    with pytest.raises(DataIntegrityError, match="transition-state"):
         database.commit()
 
 
@@ -845,7 +845,7 @@ def test__step_rejects_non_ts_stage_as_stage_ts(
     database.commit()
 
     database.add(StepRow(stage1=stage1, stage2=stage2, stage_ts=stage3))
-    with pytest.raises(ValueError, match="stage_ts"):
+    with pytest.raises(DataIntegrityError, match="stage_ts"):
         database.commit()
 
 

@@ -204,11 +204,7 @@ class GeometryRow(BaseRow, Geometry, table=True):
     def symmetry_number(self) -> int:
         """Symmetry number from stereo-preserving graph automorphisms.
 
-        Cached per instance, since counting graph isomorphisms is expensive.
-        Unlike `HessianRow.harmonic_frequencies`, no invalidation listener is
-        needed: `symbols`/`coordinates` are immutable after insert (enforced
-        by `verify_geometry_immutable_fields` in events.py), so the cached
-        value can never go stale.
+        Cached per instance since counting graph isomorphisms is expensive.
         """
         graph = geom.stereo_mol_graph(self)
         return _stereo_symmetry_number(graph)

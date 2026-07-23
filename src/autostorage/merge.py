@@ -22,11 +22,10 @@ class MergeReport:
     Attributes
     ----------
     copied
-        Number of new rows created in the target database, by table name.
+        New rows created in the target database, by table name.
     reused
-        Number of source rows deduplicated onto an already-existing target
-        row instead of being copied, by table name (only ever populated for
-        ``model`` and ``identity``, the only tables with content-based dedup).
+        Source rows deduplicated onto an existing target row, by table name
+        (only ``model`` and ``identity`` support dedup).
     """
 
     copied: dict[str, int]
@@ -38,29 +37,18 @@ def merge_databases(
 ) -> MergeReport:
     """Copy `source`'s contents into `target`, validating and deduplicating.
 
-    Every row is copied into `target` with a freshly-assigned primary key;
-    foreign keys are remapped to match, since two independently-created
-    databases will generally have colliding ids. `ModelRow` and
-    non-auto-managed `IdentityRow`s are deduplicated against `target`'s
-    existing content (reused if an equivalent row already exists there)
-    rather than duplicated. Every other row is always copied fresh, matching
-    how the schema already tolerates duplicates within a single database
-    today.
+    Rows are copied with freshly-assigned primary keys and remapped foreign
+    keys. `ModelRow` and non-auto-managed `IdentityRow`s are deduplicated
+    against `target`'s existing content; everything else is copied fresh.
 
-    InChI and conformer identities are deliberately *not* copied explicitly;
-    inserting each source `StationaryPointRow` fresh leaves
-    `autostorage.events.add_inchi_identities`/`assign_conformer_ids` to
-    regenerate and deduplicate them against `target`'s live state, which is
-    what lets a conformer appearing in both `source` and `target` collapse
-    onto one shared identity. Every copied row still passes through the same
-    ORM validation (shape checks, order-consistency checks, stage/TS checks)
-    as a normal insert.
+    InChI/conformer identities are deliberately skipped here: inserting each
+    source `StationaryPointRow` fresh lets `autostorage.events`'s flush
+    listeners regenerate and dedup them against `target`'s live state, so a
+    conformer shared by both databases collapses onto one identity. Every
+    copied row passes through normal ORM validation.
 
-    Nothing is committed to `target` until every table has been copied
-    without error: only `flush()` (not `commit()`) is used until the very
-    end, so an exception partway through (a validation failure, an
-    integrity error, an unexpectedly-`NULL` source column) leaves `target`
-    completely unchanged.
+    Only `flush()` is used until the end, so an error partway through
+    leaves `target` unchanged.
 
     Parameters
     ----------
@@ -69,15 +57,13 @@ def merge_databases(
     source
         Database to copy rows from. Only ever read, never modified.
     commit, optional
-        If True (default), commit the merge once every table has copied
-        successfully. If False, leave the merge flushed-but-uncommitted for
-        the caller to commit or roll back.
+        If True (default), commit once every table has copied successfully.
+        If False, leave flushed-but-uncommitted for the caller.
 
     Returns
     -------
     MergeReport
-        Per-table counts of rows copied and rows reused from `target`'s
-        existing content.
+        Per-table counts of rows copied and reused.
     """
     _check_mergeable(target, source)
 
@@ -145,10 +131,8 @@ def merge_databases(
 def _is_same_database(a: "Database", b: "Database") -> bool:
     """Return whether `a` and `b` refer to the same underlying database.
 
-    Two distinct in-memory databases share the literal path string
-    ``":memory:"``, so that case is never treated as a match; two on-disk
-    `Database`s are the same if they resolve to the same file, regardless of
-    relative-vs-absolute spelling.
+    In-memory databases (path ``":memory:"``) never count as a match;
+    on-disk `Database`s match if they resolve to the same file.
     """
     if a is b:
         return True
@@ -172,9 +156,8 @@ def _check_mergeable(target: "Database", source: "Database") -> None:
     Raises
     ------
     ValueError
-        If `source` and `target` are the same database, or if either is
-        missing a table/column this code's models expect (e.g. `source` is
-        on an older schema revision than `target`).
+        If `source` and `target` are the same database, or either is
+        missing an expected table/column (e.g. an outdated schema).
     """
     if _is_same_database(target, source):
         msg = "Cannot merge a database into itself."
@@ -310,16 +293,14 @@ def _copy_identities(
 ) -> set[int]:
     """Find-or-create every non-auto-managed source `IdentityRow` against `target`.
 
-    InChI/conformer identities (`AUTO_MANAGED_IDENTITY_ALGORITHMS`) are left
-    for `autostorage.events`' flush listeners to regenerate against
-    `target`'s live state instead — see `merge_databases`.
+    Auto-managed identities (`AUTO_MANAGED_IDENTITY_ALGORITHMS`) are left for
+    `autostorage.events`'s flush listeners to regenerate instead.
 
     Returns
     -------
     set[int]
-        Source-side ids of identities that were skipped (auto-managed), so
-        callers can filter out rows that reference them (e.g. identity
-        extras, stationary-identity links).
+        Source-side ids of skipped identities, so callers can filter out
+        rows referencing them (identity extras, stationary-identity links).
     """
     rows = source.exec_all(select(IdentityRow))
     skipped_ids: set[int] = set()

@@ -143,11 +143,10 @@ class Database:
 
         Note
         ----
-        Unlike `commit()`, this doesn't trigger SQLAlchemy's default
-        `expire_on_commit` behavior, so an already-loaded object whose row
-        was removed by a DB-level `ondelete="CASCADE"` during this flush
-        would otherwise be read back stale. `expire_all()` forces those
-        objects to reload (or raise) on next access instead.
+        Unlike `commit()`, this doesn't trigger SQLAlchemy's default `expire_on_commit`
+        behavior, so an already-loaded object whose row was removed by a DB-level
+        `ondelete="CASCADE"` during this flush would be read back stale. `expire_all()`
+        forces those objects to reload (or raise) on next access instead.
         """
         with self.session() as session:
             session.flush()
@@ -185,7 +184,7 @@ class Database:
         with self.session() as session:
             return session.exec(stmt).first()
 
-    def exec_one[RowT](self, stmt: SelectStatement[RowT]) -> RowT:
+    def exec_one[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> RowT:
         """Return the single match to a statement."""
         with self.session() as session:
             try:
@@ -197,7 +196,7 @@ class Database:
                 msg = f"Multiple rows found matching {stmt}."
                 raise LookupError(msg) from exc
 
-    def exec_all[RowT](self, stmt: SelectStatement[RowT]) -> list[RowT]:
+    def exec_all[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> list[RowT]:
         """Return all matches to a statement."""
         with self.session() as session:
             return list(session.exec(stmt).all())
@@ -205,8 +204,8 @@ class Database:
     def exists[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> bool:
         """Return whether any row matches a statement.
 
-        Executes as a single `EXISTS` subquery instead of `exec_first`, so a
-        matching row is never materialized just to check for its presence.
+        Executes as a single `EXISTS` subquery instead of `exec_first`, so a matching
+        row is never materialized.
         """
         with self.session() as session:
             return bool(
@@ -240,9 +239,8 @@ class Database:
 def merge_databases(target: Path, source: Path) -> None:
     """Merge one on-disk database's contents into another, as a CLI command.
 
-    Installed as the ``autostorage-merge`` console script (see
-    ``[project.scripts]`` in ``pyproject.toml``); also runnable via
-    ``python -m autostorage.database``.
+    Installed as the ``autostorage-merge`` console script (see ``[project.scripts]`` in
+    ``pyproject.toml``); also runnable via ``python -m autostorage.database``.
     """
     with Database(target) as target_db, Database(source) as source_db:
         report = _merge_databases(target=target_db, source=source_db)
