@@ -78,6 +78,16 @@ with Database("workflow.db") as db:
     ...
 ```
 
+Two databases can be combined with `Database.merge_from()`, which copies every row from one into the other, remapping ids/foreign keys and deduplicating content-unique rows (models, non-auto-managed identities) against the target's existing data:
+
+```python
+with Database("combined.db") as target, Database("other.db") as other:
+    report = target.merge_from(other)
+    print(report.copied, report.reused)  # per-table row counts
+```
+
+For a full worked example covering geometries, trajectories, results, and identities, see [`examples/stationary_point.py`](examples/stationary_point.py). Reaction networks (`StageRow`/`StepRow`) can be exported as [MESS](https://tcg.cse.anl.gov/papr/codes/mess.html) input via `autostorage.utils.export_mess_input()`, or rendered as a potential energy surface diagram via `autostorage.utils.plot_pes()`.
+
 See `CLAUDE.md` for the full module map and architecture notes.
 
 ## Contributing
