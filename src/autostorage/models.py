@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Self, dataclass_transform
 import numpy as np
 from automol import Geometry, Identity, geom
 from automol.utils.types import FloatArray
+from sqlalchemy import inspect as sa_inspect
 from sqlmodel import (
     JSON,
     CheckConstraint,
@@ -68,6 +69,40 @@ class BaseResultRow(BaseRow):
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
 class BaseLink(SQLModel):
     """Base for models without a primary ID."""
+
+    @classmethod
+    def create(cls, *rows: BaseRow, **attrs: object) -> Self:
+        """Construct a link, matching each row to its relationship by type.
+
+        Parameters
+        ----------
+        *rows
+            The rows to link (e.g. a ``GeometryRow`` and a ``CalculationRow``),
+            in any order.
+        **attrs
+            Extra attributes to set on the link (e.g. ``role``).
+
+        Returns
+        -------
+        Self
+            The constructed (unsaved) link row.
+        """
+        relationships = sa_inspect(cls, raiseerr=True).relationships
+        fields: dict[str, BaseRow] = {}
+        for row in rows:
+            match = next(
+                (
+                    rel.key
+                    for rel in relationships
+                    if rel.key not in fields and isinstance(row, rel.mapper.class_)
+                ),
+                None,
+            )
+            if match is None:
+                msg = f"{cls.__name__} has no unmatched relationship for {row!r}."
+                raise ValueError(msg)
+            fields[match] = row
+        return cls(**fields, **attrs)
 
 
 # Link tables

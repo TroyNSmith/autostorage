@@ -19,6 +19,28 @@ from autostorage import (
     StepRow,
 )
 from autostorage.exc import MissingPrimaryKeyError, ResultShapeError
+from autostorage.types import Role
+
+
+def test__link_create_matches_rows_by_type(
+    calculation_row: CalculationRow, geometry_row: GeometryRow
+) -> None:
+    """Test that link.create() matches rows to relationships regardless of order."""
+    link = CalculationGeometryLink.create(
+        geometry_row, calculation_row, role=Role.INPUT
+    )
+
+    assert link.calculation is calculation_row
+    assert link.geometry is geometry_row
+    assert link.role == Role.INPUT
+
+
+def test__link_create_rejects_unmatched_row(
+    calculation_row: CalculationRow, model_row: ModelRow
+) -> None:
+    """Test that link.create() raises when a row has no matching relationship."""
+    with pytest.raises(ValueError, match="no unmatched relationship"):
+        CalculationGeometryLink.create(calculation_row, model_row, role=Role.INPUT)
 
 
 def test__model_find_or_create_reuses_matching_row(database: Database) -> None:
