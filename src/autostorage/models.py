@@ -141,226 +141,40 @@ class BaseLink(SQLModel):
         return cls(**fields, **attrs)
 
 
-# Link tables
-class CalculationGeometryLink(BaseLink, table=True):
-    """Association table linking geometries to a calculation.
+# Geometry table
+class GeometryRow(BaseRow, Geometry, table=True):
+    """Molecular geometry definition and metadata.
 
     Attributes
     ----------
-    geometry_id
-        Foreign key to the linked geometry.
-    calculation_id
-        Foreign key to the linked calculation.
-    role
-        Role the geometry plays for this calculation (input/output).
-    geometry
-        The linked geometry.
-    calculation
-        The linked calculation.
+    symbols
+        Atomic symbols in order.
+    coordinates
+        Atomic coordinates in Angstrom.
+    charge
+        Total molecular charge.
+    spin
+        Number of unpaired electrons (2S).
     """
 
-    __tablename__ = "calculation_geometry_link"
-    __table_args__ = (
-        # The composite primary key only serves lookups keyed by `geometry_id`
-        # (its leading column); this adds a matching index for `calculation_id`.
-        Index("ix_calculation_geometry_link_calculation_id", "calculation_id"),
+    __tablename__ = "geometry"
+
+    symbols: list[str] = Field(sa_column=Column(JSON))
+    coordinates: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
+    charge: int
+    spin: int
+
+    energies: list["EnergyRow"] = Relationship(back_populates="geometry")
+    gradients: list["GradientRow"] = Relationship(back_populates="geometry")
+    hessians: list["HessianRow"] = Relationship(back_populates="geometry")
+    stationary_points: list["StationaryPointRow"] = Relationship(
+        back_populates="geometry"
     )
-
-    geometry_id: int | None = Field(
-        default=None,
-        foreign_key="geometry.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
+    trajectory_links: list["TrajectoryGeometryLink"] = Relationship(
+        back_populates="geometry"
     )
-    calculation_id: int | None = Field(
-        default=None,
-        foreign_key="calculation.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
-    role: Role = Field(
-        sa_column=Column(Enum(Role, values_callable=lambda x: [e.value for e in x]))
-    )
-
-    geometry: "GeometryRow" = Relationship(back_populates="calculation_links")
-    calculation: "CalculationRow" = Relationship(back_populates="geometry_links")
-
-
-class CalculationTrajectoryLink(BaseLink, table=True):
-    """Association table linking trajectories to a calculation.
-
-    Attributes
-    ----------
-    trajectory_id
-        Foreign key to the linked trajectory.
-    calculation_id
-        Foreign key to the linked calculation.
-    role
-        Role the trajectory plays for this calculation (input/output).
-    trajectory
-        The linked trajectory.
-    calculation
-        The linked calculation.
-    """
-
-    __tablename__ = "calculation_trajectory_link"
-    __table_args__ = (
-        Index("ix_calculation_trajectory_link_calculation_id", "calculation_id"),
-    )
-
-    trajectory_id: int | None = Field(
-        default=None,
-        foreign_key="trajectory.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
-    calculation_id: int | None = Field(
-        default=None,
-        foreign_key="calculation.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
-    role: Role = Field(
-        sa_column=Column(Enum(Role, values_callable=lambda x: [e.value for e in x]))
-    )
-
-    trajectory: "TrajectoryRow" = Relationship(back_populates="calculation_links")
-    calculation: "CalculationRow" = Relationship(back_populates="trajectory_links")
-
-
-class TrajectoryGeometryLink(BaseLink, table=True):
-    """Association table linking geometries to a trajectory.
-
-    Attributes
-    ----------
-    geometry_id
-        Foreign key to the linked geometry.
-    trajectory_id
-        Foreign key to the linked trajectory.
-    index
-        Position of the geometry within the trajectory.
-    geometry
-        The linked geometry.
-    trajectory
-        The linked trajectory.
-    """
-
-    __tablename__ = "trajectory_geometry_link"
-    __table_args__ = (
-        Index("ix_trajectory_geometry_link_trajectory_id", "trajectory_id"),
-    )
-
-    geometry_id: int | None = Field(
-        default=None,
-        foreign_key="geometry.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    trajectory_id: int | None = Field(
-        default=None,
-        foreign_key="trajectory.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    index: list[int] | None = Field(default=None, sa_column=Column(JSON))
-
-    geometry: "GeometryRow" = Relationship(back_populates="trajectory_links")
-    trajectory: "TrajectoryRow" = Relationship(back_populates="geometry_links")
-
-
-class StationaryIdentityLink(BaseLink, table=True):
-    """Association table linking stationary points to chemical identities.
-
-    Attributes
-    ----------
-    stationary_id
-        Foreign key to the linked stationary point.
-    identity_id
-        Foreign key to the linked identity.
-    """
-
-    __tablename__ = "stationary_identity_link"
-    __table_args__ = (Index("ix_stationary_identity_link_identity_id", "identity_id"),)
-
-    stationary_id: int = Field(
-        foreign_key="stationary_point.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    identity_id: int = Field(
-        foreign_key="identity.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-
-
-class StationaryStageLink(BaseLink, table=True):
-    """Association table linking stationary points to reaction stages.
-
-    Attributes
-    ----------
-    stationary_id
-        Foreign key to the linked stationary point.
-    stage_id
-        Foreign key to the linked reaction stage.
-    stationary
-        The linked stationary point.
-    stage
-        The linked reaction stage.
-    """
-
-    __tablename__ = "stationary_stage_link"
-    __table_args__ = (Index("ix_stationary_stage_link_stage_id", "stage_id"),)
-
-    stationary_id: int | None = Field(
-        default=None,
-        foreign_key="stationary_point.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    stage_id: int | None = Field(
-        default=None,
-        foreign_key="stage.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-
-
-class StepValidationLink(BaseLink, table=True):
-    """Association table linking validations to a step.
-
-    Attributes
-    ----------
-    step_id
-        Foreign key to the linked step.
-    validation_id
-        Foreign key to the linked validation.
-    """
-
-    __tablename__ = "step_validation_link"
-    __table_args__ = (Index("ix_step_validation_link_validation_id", "validation_id"),)
-
-    step_id: int = Field(
-        foreign_key="step.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    validation_id: int = Field(
-        foreign_key="validation.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
+    calculation_links: list["CalculationGeometryLink"] = Relationship(
+        back_populates="geometry"
     )
 
 
@@ -462,43 +276,6 @@ class HessianRow(BaseResultRow, table=True):
         return sum(1 for f in self.harmonic_frequencies if f < 0.0)
 
 
-# Geometry table
-class GeometryRow(BaseRow, Geometry, table=True):
-    """Molecular geometry definition and metadata.
-
-    Attributes
-    ----------
-    symbols
-        Atomic symbols in order.
-    coordinates
-        Atomic coordinates in Angstrom.
-    charge
-        Total molecular charge.
-    spin
-        Number of unpaired electrons (2S).
-    """
-
-    __tablename__ = "geometry"
-
-    symbols: list[str] = Field(sa_column=Column(JSON))
-    coordinates: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
-    charge: int
-    spin: int
-
-    energies: list["EnergyRow"] = Relationship(back_populates="geometry")
-    gradients: list["GradientRow"] = Relationship(back_populates="geometry")
-    hessians: list["HessianRow"] = Relationship(back_populates="geometry")
-    stationary_points: list["StationaryPointRow"] = Relationship(
-        back_populates="geometry"
-    )
-    trajectory_links: list["TrajectoryGeometryLink"] = Relationship(
-        back_populates="geometry"
-    )
-    calculation_links: list["CalculationGeometryLink"] = Relationship(
-        back_populates="geometry"
-    )
-
-
 # Trajectory table
 class TrajectoryRow(BaseRow, table=True):
     """Ordered sequence of geometries from a calculation trajectory.
@@ -516,6 +293,115 @@ class TrajectoryRow(BaseRow, table=True):
     )
     calculation_links: list["CalculationTrajectoryLink"] = Relationship(
         back_populates="trajectory"
+    )
+
+
+class TrajectoryGeometryLink(BaseLink, table=True):
+    """Association table linking geometries to a trajectory.
+
+    Attributes
+    ----------
+    geometry_id
+        Foreign key to the linked geometry.
+    trajectory_id
+        Foreign key to the linked trajectory.
+    index
+        Position of the geometry within the trajectory.
+    geometry
+        The linked geometry.
+    trajectory
+        The linked trajectory.
+    """
+
+    __tablename__ = "trajectory_geometry_link"
+    __table_args__ = (
+        Index("ix_trajectory_geometry_link_trajectory_id", "trajectory_id"),
+    )
+
+    geometry_id: int | None = Field(
+        default=None,
+        foreign_key="geometry.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
+    trajectory_id: int | None = Field(
+        default=None,
+        foreign_key="trajectory.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
+    index: list[int] | None = Field(default=None, sa_column=Column(JSON))
+
+    geometry: "GeometryRow" = Relationship(back_populates="trajectory_links")
+    trajectory: "TrajectoryRow" = Relationship(back_populates="geometry_links")
+
+
+# Link tables declared here, ahead of the StationaryPointRow/IdentityRow and
+# StationaryPointRow/StageRow entities they connect, because SQLModel's
+# `link_model=` kwarg needs the actual class object at class-body-evaluation
+# time — unlike every other cross-model reference in this file, it can't be
+# satisfied by a lazily-resolved string forward ref.
+class StationaryIdentityLink(BaseLink, table=True):
+    """Association table linking stationary points to chemical identities.
+
+    Attributes
+    ----------
+    stationary_id
+        Foreign key to the linked stationary point.
+    identity_id
+        Foreign key to the linked identity.
+    """
+
+    __tablename__ = "stationary_identity_link"
+    __table_args__ = (Index("ix_stationary_identity_link_identity_id", "identity_id"),)
+
+    stationary_id: int = Field(
+        foreign_key="stationary_point.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
+    identity_id: int = Field(
+        foreign_key="identity.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
+
+
+class StationaryStageLink(BaseLink, table=True):
+    """Association table linking stationary points to reaction stages.
+
+    Attributes
+    ----------
+    stationary_id
+        Foreign key to the linked stationary point.
+    stage_id
+        Foreign key to the linked reaction stage.
+    stationary
+        The linked stationary point.
+    stage
+        The linked reaction stage.
+    """
+
+    __tablename__ = "stationary_stage_link"
+    __table_args__ = (Index("ix_stationary_stage_link_stage_id", "stage_id"),)
+
+    stationary_id: int | None = Field(
+        default=None,
+        foreign_key="stationary_point.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
+    stage_id: int | None = Field(
+        default=None,
+        foreign_key="stage.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
     )
 
 
@@ -775,6 +661,36 @@ class StageRow(BaseRow, table=True):
         db.add(row)
         db.commit()
         return row
+
+
+# Declared here, ahead of StepRow, for the same `link_model=` reason as
+# StationaryIdentityLink/StationaryStageLink above.
+class StepValidationLink(BaseLink, table=True):
+    """Association table linking validations to a step.
+
+    Attributes
+    ----------
+    step_id
+        Foreign key to the linked step.
+    validation_id
+        Foreign key to the linked validation.
+    """
+
+    __tablename__ = "step_validation_link"
+    __table_args__ = (Index("ix_step_validation_link_validation_id", "validation_id"),)
+
+    step_id: int = Field(
+        foreign_key="step.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
+    validation_id: int = Field(
+        foreign_key="validation.id",
+        primary_key=True,
+        ondelete="CASCADE",
+        nullable=False,
+    )
 
 
 class StepRow(BaseRow, table=True):
@@ -1060,6 +976,96 @@ class CalculationRow(BaseRow, table=True):
             for link in self.trajectory_links
             if link.role == Role.OUTPUT
         ]
+
+
+class CalculationGeometryLink(BaseLink, table=True):
+    """Association table linking geometries to a calculation.
+
+    Attributes
+    ----------
+    geometry_id
+        Foreign key to the linked geometry.
+    calculation_id
+        Foreign key to the linked calculation.
+    role
+        Role the geometry plays for this calculation (input/output).
+    geometry
+        The linked geometry.
+    calculation
+        The linked calculation.
+    """
+
+    __tablename__ = "calculation_geometry_link"
+    __table_args__ = (
+        # The composite primary key only serves lookups keyed by `geometry_id`
+        # (its leading column); this adds a matching index for `calculation_id`.
+        Index("ix_calculation_geometry_link_calculation_id", "calculation_id"),
+    )
+
+    geometry_id: int | None = Field(
+        default=None,
+        foreign_key="geometry.id",
+        ondelete="CASCADE",
+        nullable=False,
+        primary_key=True,
+    )
+    calculation_id: int | None = Field(
+        default=None,
+        foreign_key="calculation.id",
+        ondelete="CASCADE",
+        nullable=False,
+        primary_key=True,
+    )
+    role: Role = Field(
+        sa_column=Column(Enum(Role, values_callable=lambda x: [e.value for e in x]))
+    )
+
+    geometry: "GeometryRow" = Relationship(back_populates="calculation_links")
+    calculation: "CalculationRow" = Relationship(back_populates="geometry_links")
+
+
+class CalculationTrajectoryLink(BaseLink, table=True):
+    """Association table linking trajectories to a calculation.
+
+    Attributes
+    ----------
+    trajectory_id
+        Foreign key to the linked trajectory.
+    calculation_id
+        Foreign key to the linked calculation.
+    role
+        Role the trajectory plays for this calculation (input/output).
+    trajectory
+        The linked trajectory.
+    calculation
+        The linked calculation.
+    """
+
+    __tablename__ = "calculation_trajectory_link"
+    __table_args__ = (
+        Index("ix_calculation_trajectory_link_calculation_id", "calculation_id"),
+    )
+
+    trajectory_id: int | None = Field(
+        default=None,
+        foreign_key="trajectory.id",
+        ondelete="CASCADE",
+        nullable=False,
+        primary_key=True,
+    )
+    calculation_id: int | None = Field(
+        default=None,
+        foreign_key="calculation.id",
+        ondelete="CASCADE",
+        nullable=False,
+        primary_key=True,
+    )
+    role: Role = Field(
+        sa_column=Column(Enum(Role, values_callable=lambda x: [e.value for e in x]))
+    )
+
+    trajectory: "TrajectoryRow" = Relationship(back_populates="calculation_links")
+    calculation: "CalculationRow" = Relationship(back_populates="trajectory_links")
 
 
 class ValidationRow(BaseRow, table=True):
