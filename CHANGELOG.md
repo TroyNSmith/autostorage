@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`ModelRow.find_or_create`**: Look up a matching model row by content before creating one. `unique_model` doesn't catch duplicates when `program_version` or `basis` is `NULL`, since SQL treats `NULL` as distinct from itself in unique constraints — callers constructing and saving a fresh `ModelRow` each time (without both fields set) were silently accumulating duplicate rows for the same logical model, which broke downstream lookups keyed on `model_id`.
 
+### Removed
+
+- **`BaseRow.save()` and `BaseLink.save()`**: Duplicated `Database.add()`/`Database.merge()` with a non-obvious "always commits" side effect. Use `db.add(row)` / `db.merge(row)` directly.
+- **`GeometryRow.calculation_link()`, `.trajectory_link()`, `.stationary_point()`, `.energy()`, `.gradient()`, `.hessian()`**: Unused one-line wrappers around link/result-row constructors. Construct the row directly instead (e.g. `HessianRow(calculation=..., geometry=..., value=...)`).
+- **`TrajectoryRow.geometry_link()`, `.calculation_link()`**: Unused one-line wrappers; construct the link row directly.
+- **`CalculationRow.geometry_link()`, `.trajectory_link()`**: Unused one-line wrappers; construct the link row directly.
+
 ## [0.0.10] - 2026-07-17
 ### Added
 

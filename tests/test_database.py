@@ -141,11 +141,11 @@ def test__select_statement_offset_and_distinct(database: Database) -> None:
 
 
 def test__merge_commits(database: Database, model_row: ModelRow) -> None:
-    """Test that merge() (and therefore BaseRow.save()) commits immediately."""
-    merged = model_row.save(database)
+    """Test that merge() commits immediately."""
+    merged = database.merge(model_row)
     assert merged.id
 
-    # A rollback after save() must not undo it, since merge() already committed.
+    # A rollback after merge() must not undo it, since merge() already committed.
     database._session.rollback()  # noqa: SLF001
     assert database.get(ModelRow, merged.id) == merged
 

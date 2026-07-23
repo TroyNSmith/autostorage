@@ -70,12 +70,15 @@ def test__hessian_shape(
     rng: Generator,
 ) -> None:
     """Test hessian shape is validated before committing to database."""
-    calculation_row.save(database)
-    geometry_row.save(database)
-    calc_geo_link.save(database)
+    database.add(calculation_row)
+    database.add(geometry_row)
+    database.add(calc_geo_link)
+    database.commit()
 
-    hess = geometry_row.hessian(
-        calc=calculation_row, value=list(rng.uniform(size=(3, 2)))
+    hess = HessianRow(
+        calculation=calculation_row,
+        geometry=geometry_row,
+        value=rng.uniform(size=(3, 2)),
     )
     database.add(hess)
 
@@ -113,13 +116,16 @@ def test__result_query(
     rng: Generator,
 ) -> None:
     """Test querying of result tables."""
-    calculation_row.save(database)
-    geometry_row.save(database)
-    calc_geo_link.save(database)
+    database.add(calculation_row)
+    database.add(geometry_row)
+    database.add(calc_geo_link)
+    database.commit()
 
     n = geometry_row.atom_count
-    hess = geometry_row.hessian(
-        calc=calculation_row, value=list(rng.uniform(size=(3 * n, 3 * n)))
+    hess = HessianRow(
+        calculation=calculation_row,
+        geometry=geometry_row,
+        value=rng.uniform(size=(3 * n, 3 * n)),
     )
     database.add(hess)
 
@@ -206,8 +212,9 @@ def test__stationary_query(
     database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
 ) -> None:
     """Test querying of stationary points."""
-    calculation_row.save(database)
-    geometry_row.save(database)
+    database.add(calculation_row)
+    database.add(geometry_row)
+    database.commit()
 
     stationary = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
     database.add(stationary)
@@ -234,8 +241,9 @@ def test__stage_and_step_query(
     database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
 ) -> None:
     """Test querying of stages and steps built on the chainable Query API."""
-    calculation_row.save(database)
-    geometry_row.save(database)
+    database.add(calculation_row)
+    database.add(geometry_row)
+    database.commit()
 
     stationary1 = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
     stationary2 = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)

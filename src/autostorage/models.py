@@ -33,12 +33,6 @@ class BaseRow(SQLModel):
 
     id: int | None = Field(default=None, primary_key=True)
 
-    def save(self, db: "Database") -> Self:
-        """Add (or merge) self into the session, returning tracked row."""
-        if self.id is None:
-            db.add(self)
-        return db.merge(self)
-
 
 class BaseResultRow(BaseRow):
     """Base for result models."""
@@ -74,14 +68,6 @@ class BaseResultRow(BaseRow):
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
 class BaseLink(SQLModel):
     """Base for models without a primary ID."""
-
-    def save(self, db: "Database") -> Self:
-        """Add (or merge) self into the session.
-
-        Returns None to discourage duplicate inserts of joint PK.
-        """
-        db.add(self)
-        return self
 
 
 # Link tables
@@ -433,51 +419,6 @@ class GeometryRow(BaseRow, Geometry, table=True):
         back_populates="geometry"
     )
 
-    def calculation_link(
-        self: Self, calc: "CalculationRow", role: Role
-    ) -> CalculationGeometryLink:
-        """Return a CalculationGeometryLink to self."""
-        return CalculationGeometryLink(calculation=calc, geometry=self, role=role)
-
-    def trajectory_link(
-        self: Self, traj: "TrajectoryRow", index: list[int] | None = None
-    ) -> TrajectoryGeometryLink:
-        """Return a TrajectoryGeometryLink to self."""
-        return TrajectoryGeometryLink(trajectory=traj, geometry=self, index=index)
-
-    def stationary_point(
-        self: Self,
-        calc: "CalculationRow",
-        *,
-        order: int = 0,
-        is_pseudo: bool = False,
-        is_valid: bool = False,
-    ) -> "StationaryPointRow":
-        """Return a StationaryPointRow linked to self."""
-        return StationaryPointRow(
-            calculation=calc,
-            geometry=self,
-            order=order,
-            is_pseudo=is_pseudo,
-            is_valid=is_valid,
-        )
-
-    def energy(self: Self, calc: "CalculationRow", value: float) -> "EnergyRow":
-        """Return an EnergyRow linked to self."""
-        return EnergyRow(calculation=calc, geometry=self, value=value)
-
-    def gradient(
-        self: Self, calc: "CalculationRow", value: list[float]
-    ) -> "GradientRow":
-        """Return a GradientRow linked to self."""
-        return GradientRow(calculation=calc, geometry=self, value=np.array(value))
-
-    def hessian(
-        self: Self, calc: "CalculationRow", value: list[list[float]]
-    ) -> "HessianRow":
-        """Return a HessianRow linked to self."""
-        return HessianRow(calculation=calc, geometry=self, value=np.array(value))
-
 
 # Trajectory table
 class TrajectoryRow(BaseRow, table=True):
@@ -497,18 +438,6 @@ class TrajectoryRow(BaseRow, table=True):
     calculation_links: list["CalculationTrajectoryLink"] = Relationship(
         back_populates="trajectory"
     )
-
-    def geometry_link(
-        self: Self, geo: "GeometryRow", index: list[int] | None = None
-    ) -> TrajectoryGeometryLink:
-        """Return a TrajectoryGeometryLink to self."""
-        return TrajectoryGeometryLink(trajectory=self, geometry=geo, index=index)
-
-    def calculation_link(
-        self: Self, calc: "CalculationRow", role: Role
-    ) -> CalculationTrajectoryLink:
-        """Return a CalculationTrajectoryLink to self."""
-        return CalculationTrajectoryLink(calculation=calc, trajectory=self, role=role)
 
 
 # Stationary point rows
@@ -846,7 +775,7 @@ class ModelRow(BaseRow, table=True):
         ``unique_model`` doesn't catch duplicates when ``program_version``
         or ``basis`` is NULL, since SQL treats NULL as distinct from itself
         in unique constraints. Callers that don't always supply both should
-        use this instead of constructing and saving a ``ModelRow`` directly,
+        use this instead of constructing and adding a ``ModelRow`` directly,
         to avoid silently accumulating duplicate rows for the same model.
         """
         stmt = select(cls).where(
@@ -859,12 +788,15 @@ class ModelRow(BaseRow, table=True):
         if existing is not None:
             return existing
 
-        return cls(
+        row = cls(
             program=program,
             program_version=program_version,
             method=method,
             basis=basis,
-        ).save(db)
+        )
+        db.add(row)
+        db.commit()
+        return row
 
 
 class CalculationRow(BaseRow, table=True):
@@ -908,18 +840,6 @@ class CalculationRow(BaseRow, table=True):
     trajectory_links: list["CalculationTrajectoryLink"] = Relationship(
         back_populates="calculation"
     )
-
-    def geometry_link(
-        self: Self, geo: "GeometryRow", role: Role
-    ) -> CalculationGeometryLink:
-        """Return a CalculationGeometryLink to self."""
-        return CalculationGeometryLink(calculation=self, geometry=geo, role=role)
-
-    def trajectory_link(
-        self: Self, traj: "TrajectoryRow", role: Role
-    ) -> CalculationTrajectoryLink:
-        """Return a CalculationTrajectoryLink to self."""
-        return CalculationTrajectoryLink(calculation=self, trajectory=traj, role=role)
 
 
 class ValidationRow(BaseRow, table=True):
