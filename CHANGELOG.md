@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+## [0.0.12] - 2026-07-23
 ### Added
 
 - **`GeometryRow.geometry_hash`, `.find_or_create`**: A `sha256` hash of `symbols`/`coordinates`/`charge`/`spin`, backed by a unique constraint, plus a `find_or_create` classmethod (same `commit`-flag pattern as `ModelRow.find_or_create`) that reuses a matching row instead of inserting a duplicate. Only catches bit-identical content — a rotated/translated/jittered near-duplicate conformer still gets its own row.
