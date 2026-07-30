@@ -1,11 +1,21 @@
 """Reaction-related row definitions: stationary points, identities, stages, steps."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from automol import Identity
-from sqlmodel import CheckConstraint, Field, Index, Relationship, UniqueConstraint, text
+from sqlmodel import (
+    CheckConstraint,
+    Field,
+    Index,
+    Relationship,
+    SQLModel,
+    UniqueConstraint,
+    func,
+    text,
+)
 
-from .core import BaseRow, _fk_field
+from ..types import _fk_field
 from .link import StationaryIdentityLink, StationaryStageLink, StepValidationLink
 
 if TYPE_CHECKING:
@@ -14,7 +24,7 @@ if TYPE_CHECKING:
 
 
 # Stationary point rows
-class StationaryPointRow(BaseRow, table=True):
+class StationaryPointRow(SQLModel, table=True):
     """A stationary point on a potential energy surface.
 
     Attributes
@@ -42,6 +52,7 @@ class StationaryPointRow(BaseRow, table=True):
 
     __tablename__ = "stationary_point"
 
+    id: int | None = Field(default=None, primary_key=True)
     geometry_id: int | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
     order: int = 0
@@ -55,6 +66,17 @@ class StationaryPointRow(BaseRow, table=True):
     )
     stages: list["StageRow"] = Relationship(
         back_populates="stationaries", link_model=StationaryStageLink
+    )
+
+    created: datetime | None = Field(
+        default=None,
+        nullable=False,
+        sa_column_kwargs={"server_default": func.now()},
+    )
+    updated: datetime | None = Field(
+        default=None,
+        nullable=False,
+        sa_column_kwargs={"server_default": func.now(), "onupdate": func.now()},
     )
 
     def identity(
@@ -79,7 +101,7 @@ class StationaryPointRow(BaseRow, table=True):
         )
 
 
-class IdentityRow(BaseRow, Identity, table=True):
+class IdentityRow(SQLModel, Identity, table=True):
     """A chemical identifier associated with one or more stationary points.
 
     Attributes
@@ -101,13 +123,15 @@ class IdentityRow(BaseRow, Identity, table=True):
         UniqueConstraint("kind", "algorithm", "value", name="unique_identity"),
     )
 
+    id: int | None = Field(default=None, primary_key=True)
+
     stationary_points: list["StationaryPointRow"] = Relationship(
         back_populates="identities", link_model=StationaryIdentityLink
     )
     identity_extras: list["IdentityExtraRow"] = Relationship(back_populates="identity")
 
 
-class IdentityExtraRow(BaseRow, table=True):
+class IdentityExtraRow(SQLModel, table=True):
     """Additional key-value metadata attached to a chemical identity.
 
     Attributes
@@ -124,6 +148,7 @@ class IdentityExtraRow(BaseRow, table=True):
 
     __tablename__ = "identity_extras"
 
+    id: int | None = Field(default=None, primary_key=True)
     identity_id: int | None = Field(
         default=None,
         foreign_key="identity.id",
@@ -139,7 +164,7 @@ class IdentityExtraRow(BaseRow, table=True):
 
 
 # Reaction rows
-class StageRow(BaseRow, table=True):
+class StageRow(SQLModel, table=True):
     """A chemical state (reactant, product, or transition state) in a reaction.
 
     Attributes
@@ -155,6 +180,7 @@ class StageRow(BaseRow, table=True):
 
     __tablename__ = "stage"
 
+    id: int | None = Field(default=None, primary_key=True)
     is_ts: bool = False
 
     stationaries: list["StationaryPointRow"] = Relationship(
@@ -172,7 +198,7 @@ class StageRow(BaseRow, table=True):
     )
 
 
-class StepRow(BaseRow, table=True):
+class StepRow(SQLModel, table=True):
     """An elementary reaction step connecting a reactant, transition state, and product.
 
     Attributes
@@ -216,6 +242,7 @@ class StepRow(BaseRow, table=True):
         Index("ix_step_stage_id_ts", "stage_id_ts"),
     )
 
+    id: int | None = Field(default=None, primary_key=True)
     stage_id1: int | None = Field(
         default=None,
         foreign_key="stage.id",

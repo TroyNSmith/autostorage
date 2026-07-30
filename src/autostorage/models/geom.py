@@ -7,12 +7,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 from automol import Geometry
 from automol.utils.types import FloatArray
-from sqlmodel import JSON, Column, Field, Relationship, UniqueConstraint
+from sqlmodel import JSON, Column, Field, Relationship, SQLModel, UniqueConstraint
 from sqlmodel.main import SQLModelConfig
 
 from autostorage.types import CompressedArrayTypeDecorator
-
-from .core import BaseRow
 
 if TYPE_CHECKING:
     from .data import EnergyRow, GradientRow, HessianRow
@@ -33,7 +31,7 @@ def _geometry_hash(
 
 
 # Geometry table
-class GeometryRow(BaseRow, table=True):
+class GeometryRow(SQLModel, table=True):
     """Molecular geometry definition and metadata.
 
     Attributes
@@ -67,6 +65,7 @@ class GeometryRow(BaseRow, table=True):
     __table_args__ = (UniqueConstraint("geometry_hash", name="unique_geometry_hash"),)
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
+    id: int | None = Field(default=None, primary_key=True)
     symbols: list[str] = Field(sa_column=Column(JSON))
     coordinates: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
     charge: int

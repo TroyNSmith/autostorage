@@ -8,13 +8,26 @@ from typing import Any
 import numpy as np
 from sqlalchemy import LargeBinary
 from sqlalchemy.types import TypeDecorator
+from sqlmodel import Field
 
 __all__ = [
     "CalcStatus",
     "CalcType",
     "CompressedArrayTypeDecorator",
     "Role",
+    "_fk_field",
 ]
+
+
+def _fk_field(target: str, *, nullable: bool = False, index: bool = True) -> Any:  # noqa: ANN401
+    """Build a standard foreign-key Field with ON DELETE CASCADE."""
+    return Field(
+        default=None,
+        foreign_key=target,
+        ondelete="CASCADE",
+        nullable=nullable,
+        index=index,
+    )
 
 
 class CompressedArrayTypeDecorator(TypeDecorator):

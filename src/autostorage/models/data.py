@@ -6,19 +6,17 @@ from typing import TYPE_CHECKING
 import numpy as np
 from automol import geom
 from automol.utils.types import FloatArray
-from sqlmodel import Column, Field, Relationship
+from sqlmodel import Column, Field, Relationship, SQLModel
 from sqlmodel.main import SQLModelConfig
 
-from autostorage.types import CompressedArrayTypeDecorator
-
-from .core import BaseResultRow, _fk_field
+from autostorage.types import CompressedArrayTypeDecorator, _fk_field
 
 if TYPE_CHECKING:
     from .calc import CalculationRow
     from .geom import GeometryRow
 
 
-class EnergyRow(BaseResultRow, table=True):
+class EnergyRow(SQLModel, table=True):
     """Energy result for a specific geometry and calculation.
 
     Attributes
@@ -37,6 +35,7 @@ class EnergyRow(BaseResultRow, table=True):
 
     __tablename__ = "energy"
 
+    id: int | None = Field(default=None, primary_key=True)
     geometry_id: int | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
     value: float
@@ -45,7 +44,7 @@ class EnergyRow(BaseResultRow, table=True):
     geometry: "GeometryRow" = Relationship(back_populates="energies")
 
 
-class GradientRow(BaseResultRow, table=True):
+class GradientRow(SQLModel, table=True):
     """Energy gradient result for a specific geometry and calculation.
 
     Attributes
@@ -65,6 +64,7 @@ class GradientRow(BaseResultRow, table=True):
     __tablename__ = "gradient"
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
+    id: int | None = Field(default=None, primary_key=True)
     geometry_id: int | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
     value: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
@@ -73,7 +73,7 @@ class GradientRow(BaseResultRow, table=True):
     geometry: "GeometryRow" = Relationship(back_populates="gradients")
 
 
-class HessianRow(BaseResultRow, table=True):
+class HessianRow(SQLModel, table=True):
     """Hessian result for a specific geometry and calculation.
 
     Attributes
@@ -93,6 +93,7 @@ class HessianRow(BaseResultRow, table=True):
     __tablename__ = "hessian"
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
+    id: int | None = Field(default=None, primary_key=True)
     geometry_id: int | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
 

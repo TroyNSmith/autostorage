@@ -1,5 +1,6 @@
 """Calculation-related row definitions: model, calculation, validation."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import (
@@ -9,13 +10,14 @@ from sqlmodel import (
     Field,
     Index,
     Relationship,
+    SQLModel,
     UniqueConstraint,
+    func,
     text,
 )
 
-from autostorage.types import CalcStatus, CalcType, Role
+from autostorage.types import CalcStatus, CalcType, Role, _fk_field
 
-from .core import BaseRow, _fk_field
 from .link import StepValidationLink
 
 if TYPE_CHECKING:
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
 
 
 # Calculation rows
-class ModelRow(BaseRow, table=True):
+class ModelRow(SQLModel, table=True):
     """Calculation model specification.
 
     Attributes
@@ -63,13 +65,14 @@ class ModelRow(BaseRow, table=True):
         ),
     )
 
+    id: int | None = Field(default=None, primary_key=True)
     program: str
     program_version: str | None = None
     method: str
     basis: str | None = None
 
 
-class CalculationRow(BaseRow, table=True):
+class CalculationRow(SQLModel, table=True):
     """Quantum chemistry calculation and its associated data.
 
     Attributes
@@ -96,6 +99,7 @@ class CalculationRow(BaseRow, table=True):
 
     __tablename__ = "calculation"
 
+    id: int | None = Field(default=None, primary_key=True)
     model_id: int | None = Field(
         default=None,
         foreign_key="model.id",
@@ -112,15 +116,18 @@ class CalculationRow(BaseRow, table=True):
             Enum(CalcStatus, values_callable=lambda x: [e.value for e in x])
         ),
     )
-    error_message: str | None = Field(default=None)
-    # Intentionally unbounded free-form JSON; add a size/schema guardrail if
-    # these are ever populated from a less-trusted input path.
     input_provenance: dict[str, Any] | None = Field(
         default_factory=dict, sa_column=Column(JSON)
     )
     output_provenance: dict[str, Any] | None = Field(
         default_factory=dict, sa_column=Column(JSON)
     )
+    created: datetime | None = Field(
+        default=None,
+        nullable=False,
+        sa_column_kwargs={"server_default": func.now()},
+    )
+    error_message: str | None = Field(default=None)
 
     model: "ModelRow" = Relationship()
     geometry_links: list["CalculationGeometryLink"] = Relationship(
@@ -161,7 +168,7 @@ class CalculationRow(BaseRow, table=True):
         ]
 
 
-class ValidationRow(BaseRow, table=True):
+class ValidationRow(SQLModel, table=True):
     """Validation result for a specific step and calculation.
 
     Attributes
@@ -180,6 +187,7 @@ class ValidationRow(BaseRow, table=True):
 
     __tablename__ = "validation"
 
+    id: int | None = Field(default=None, primary_key=True)
     calculation_id: int | None = _fk_field("calculation.id")
 
     method: str

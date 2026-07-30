@@ -2,11 +2,9 @@
 
 from typing import TYPE_CHECKING
 
-from sqlmodel import JSON, Column, Enum, Field, Index, Relationship
+from sqlmodel import JSON, Column, Enum, Field, Index, Relationship, SQLModel
 
 from autostorage.types import Role
-
-from .core import BaseLink
 
 if TYPE_CHECKING:
     from .calc import CalculationRow
@@ -14,7 +12,7 @@ if TYPE_CHECKING:
     from .traj import TrajectoryRow
 
 
-class TrajectoryGeometryLink(BaseLink, table=True):
+class TrajectoryGeometryLink(SQLModel, table=True):
     """Association table linking geometries to a trajectory.
 
     Attributes
@@ -61,7 +59,7 @@ class TrajectoryGeometryLink(BaseLink, table=True):
 # `link_model=` kwarg needs the actual class object at class-body-evaluation
 # time — unlike every other cross-model reference in this file, it can't be
 # satisfied by a lazily-resolved string forward ref.
-class StationaryIdentityLink(BaseLink, table=True):
+class StationaryIdentityLink(SQLModel, table=True):
     """Association table linking stationary points to chemical identities.
 
     Attributes
@@ -89,7 +87,7 @@ class StationaryIdentityLink(BaseLink, table=True):
     )
 
 
-class StationaryStageLink(BaseLink, table=True):
+class StationaryStageLink(SQLModel, table=True):
     """Association table linking stationary points to reaction stages.
 
     Attributes
@@ -125,7 +123,7 @@ class StationaryStageLink(BaseLink, table=True):
 
 # Declared here, ahead of StepRow, for the same `link_model=` reason as
 # StationaryIdentityLink/StationaryStageLink above.
-class StepValidationLink(BaseLink, table=True):
+class StepValidationLink(SQLModel, table=True):
     """Association table linking validations to a step.
 
     Attributes
@@ -153,7 +151,7 @@ class StepValidationLink(BaseLink, table=True):
     )
 
 
-class CalculationGeometryLink(BaseLink, table=True):
+class CalculationGeometryLink(SQLModel, table=True):
     """Association table linking geometries to a calculation.
 
     Attributes
@@ -199,7 +197,7 @@ class CalculationGeometryLink(BaseLink, table=True):
     calculation: "CalculationRow" = Relationship(back_populates="geometry_links")
 
 
-class CalculationTrajectoryLink(BaseLink, table=True):
+class CalculationTrajectoryLink(SQLModel, table=True):
     """Association table linking trajectories to a calculation.
 
     Attributes

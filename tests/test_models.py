@@ -1,14 +1,10 @@
 """Autostorage models tests."""
 
-import time
-from unittest import mock
-
 import numpy as np
 import pytest
 from automol import Algorithm
 from numpy.random import Generator
 from scipy.spatial.transform import Rotation
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 
 from autostorage import (
@@ -30,83 +26,6 @@ from autostorage import (
 from autostorage.exc import DataIntegrityError, ResultShapeError
 from autostorage.models import CalculationTrajectoryLink
 from autostorage.types import Role
-
-
-def test__link_create_matches_rows_by_type(
-    calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test that link.create() matches rows to relationships regardless of order."""
-    link = CalculationGeometryLink.create(
-        geometry_row, calculation_row, role=Role.INPUT
-    )
-
-    assert link.calculation is calculation_row
-    assert link.geometry is geometry_row
-    assert link.role == Role.INPUT
-
-
-def test__link_create_rejects_unmatched_row(
-    calculation_row: CalculationRow, model_row: ModelRow
-) -> None:
-    """Test that link.create() raises when a row has no matching relationship."""
-    with pytest.raises(ValueError, match="no unmatched relationship"):
-        CalculationGeometryLink.create(calculation_row, model_row, role=Role.INPUT)
-
-
-def test__link_create_rejects_ambiguous_row_type(
-    calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test that link.create() raises when 2+ unfilled relationships share a type.
-
-    No current `BaseLink` subclass has two relationships to the same row
-    type, so this patches `sa_inspect` to simulate one, guarding the
-    ambiguity check against silently picking a relationship by declaration
-    order if such a link table is ever added.
-    """
-    real_relationships = list(sa_inspect(CalculationGeometryLink).relationships)
-    duplicate_geometry_rel = next(
-        rel for rel in real_relationships if rel.key == "geometry"
-    )
-
-    with mock.patch("autostorage.models.core.sa_inspect") as mock_inspect:
-        mock_inspect.return_value.relationships = [
-            *real_relationships,
-            duplicate_geometry_rel,
-        ]
-        with pytest.raises(ValueError, match="multiple unmatched relationships"):
-            CalculationGeometryLink.create(
-                geometry_row, calculation_row, role=Role.INPUT
-            )
-
-
-def test__row_timestamps_set_on_create(database: Database) -> None:
-    """Test that created_at/updated_at are populated by the database on insert."""
-    row = ModelRow(program="orca", method="xtb")
-    database.add(row)
-    database.commit()
-
-    assert row.created_at is not None
-    assert row.updated_at is not None
-
-
-def test__row_updated_at_advances_on_update(database: Database) -> None:
-    """Test that updated_at advances on a later commit while created_at doesn't."""
-    row = ModelRow(program="orca", method="xtb")
-    database.add(row)
-    database.commit()
-    created_at, updated_at = row.created_at, row.updated_at
-    assert created_at is not None
-    assert updated_at is not None
-
-    # SQLite's CURRENT_TIMESTAMP has one-second resolution.
-    time.sleep(1.1)
-    row.basis = "def2-svp"
-    database.add(row)
-    database.commit()
-
-    assert row.updated_at is not None
-    assert row.created_at == created_at
-    assert row.updated_at > updated_at
 
 
 def test__model_null_safe_index_catches_duplicate(database: Database) -> None:
@@ -162,8 +81,8 @@ def test__calculation_geometry_role_properties(
         charge=0,
         spin=0,
     )
-    output_link = CalculationGeometryLink.create(
-        calculation_row, output_geometry, role=Role.OUTPUT
+    output_link = CalculationGeometryLink(
+        calculation=calculation_row, geometry=output_geometry, role=Role.OUTPUT
     )
     database.add(calculation_row)
     database.add(geometry_row)
@@ -190,11 +109,11 @@ def test__calculation_trajectory_role_properties(
     database.add(output_trajectory)
     database.commit()
 
-    input_link = CalculationTrajectoryLink.create(
-        calculation_row, input_trajectory, role=Role.INPUT
+    input_link = CalculationTrajectoryLink(
+        calculation=calculation_row, trajectory=input_trajectory, role=Role.INPUT
     )
-    output_link = CalculationTrajectoryLink.create(
-        calculation_row, output_trajectory, role=Role.OUTPUT
+    output_link = CalculationTrajectoryLink(
+        calculation=calculation_row, trajectory=output_trajectory, role=Role.OUTPUT
     )
     database.add(calculation_row)
     database.add(input_link)

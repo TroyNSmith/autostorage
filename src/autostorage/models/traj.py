@@ -2,15 +2,13 @@
 
 from typing import TYPE_CHECKING
 
-from sqlmodel import Relationship
-
-from .core import BaseRow
+from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     from .link import CalculationTrajectoryLink, TrajectoryGeometryLink
 
 
-class TrajectoryRow(BaseRow, table=True):
+class TrajectoryRow(SQLModel, table=True):
     """Ordered sequence of geometries from a calculation trajectory.
 
     Attributes
@@ -22,6 +20,8 @@ class TrajectoryRow(BaseRow, table=True):
     """
 
     __tablename__ = "trajectory"
+
+    id: int | None = Field(default=None, primary_key=True)
 
     geometry_links: list["TrajectoryGeometryLink"] = Relationship(
         back_populates="trajectory"
