@@ -1,6 +1,6 @@
 """Calculation-related row definitions: model, calculation, validation."""
 
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import (
     JSON,
@@ -10,7 +10,6 @@ from sqlmodel import (
     Index,
     Relationship,
     UniqueConstraint,
-    select,
     text,
 )
 
@@ -20,8 +19,6 @@ from .core import BaseRow, _fk_field
 from .link import StepValidationLink
 
 if TYPE_CHECKING:
-    from autostorage.database import Database
-
     from .geom import GeometryRow
     from .link import CalculationGeometryLink, CalculationTrajectoryLink
     from .rxn import StepRow
@@ -54,8 +51,8 @@ class ModelRow(BaseRow, table=True):
             name="unique_model",
         ),
         # `unique_model` doesn't catch duplicates when `program_version` or `basis`
-        # is NULL (see `find_or_create` below). This expression index closes that
-        # gap at the DB level, defense-in-depth alongside the app-level lookup.
+        # is NULL, since SQL treats NULL as distinct from itself in unique
+        # constraints. This expression index closes that gap at the DB level.
         Index(
             "unique_model_null_safe",
             "program",
@@ -70,56 +67,6 @@ class ModelRow(BaseRow, table=True):
     program_version: str | None = None
     method: str
     basis: str | None = None
-
-    @classmethod
-    def find_or_create(  # noqa: PLR0913
-        cls,
-        db: "Database",
-        *,
-        program: str,
-        method: str,
-        program_version: str | None = None,
-        basis: str | None = None,
-        commit: bool = True,
-    ) -> Self:
-        """Return the matching model row, creating and saving one if absent.
-
-        ``unique_model`` doesn't catch duplicates when ``program_version``
-        or ``basis`` is NULL, since SQL treats NULL as distinct from itself
-        in unique constraints. Callers that don't always supply both should
-        use this instead of constructing and adding a ``ModelRow`` directly,
-        to avoid silently accumulating duplicate rows for the same model.
-
-        Parameters
-        ----------
-        commit, optional
-            If True (default), commit a newly-created row immediately. If
-            False, only flush it (still assigns `.id`), leaving the caller's
-            transaction open — for a caller staging several dedup lookups
-            that must succeed or fail together.
-        """
-        stmt = select(cls).where(
-            cls.program == program,
-            cls.program_version == program_version,
-            cls.method == method,
-            cls.basis == basis,
-        )
-        existing = db.exec_first(stmt)
-        if existing is not None:
-            return existing
-
-        row = cls(
-            program=program,
-            program_version=program_version,
-            method=method,
-            basis=basis,
-        )
-        db.add(row)
-        if commit:
-            db.commit()
-        else:
-            db.flush()
-        return row
 
 
 class CalculationRow(BaseRow, table=True):

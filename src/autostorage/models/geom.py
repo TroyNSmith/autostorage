@@ -2,12 +2,12 @@
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 import numpy as np
 from automol import Geometry
 from automol.utils.types import FloatArray
-from sqlmodel import JSON, Column, Field, Relationship, UniqueConstraint, select
+from sqlmodel import JSON, Column, Field, Relationship, UniqueConstraint
 from sqlmodel.main import SQLModelConfig
 
 from autostorage.types import CompressedArrayTypeDecorator
@@ -15,8 +15,6 @@ from autostorage.types import CompressedArrayTypeDecorator
 from .core import BaseRow
 
 if TYPE_CHECKING:
-    from autostorage.database import Database
-
     from .data import EnergyRow, GradientRow, HessianRow
     from .link import CalculationGeometryLink, TrajectoryGeometryLink
     from .rxn import StationaryPointRow
@@ -50,7 +48,7 @@ class GeometryRow(BaseRow, table=True):
         Number of unpaired electrons (2S).
     geometry_hash
         Content hash of `symbols`/`coordinates`/`charge`/`spin`, used to reject
-        exactly-duplicate geometries (see `find_or_create`).
+        exactly-duplicate geometries.
     energies
         Energy results computed at this geometry.
     gradients
@@ -96,41 +94,3 @@ class GeometryRow(BaseRow, table=True):
             charge=self.charge,
             spin=self.spin,
         )
-
-    @classmethod
-    def find_or_create(  # noqa: PLR0913
-        cls,
-        db: "Database",
-        *,
-        symbols: list[str],
-        coordinates: FloatArray,
-        charge: int,
-        spin: int,
-        commit: bool = True,
-    ) -> Self:
-        """Return the matching geometry row, creating and saving one if absent.
-
-        Matches on exact content via `geometry_hash`, so this only reuses
-        bit-identical geometries.
-
-        Parameters
-        ----------
-        commit, optional
-            If True (default), commit a newly-created row immediately. If
-            False, only flush it (still assigns `.id`), leaving the caller's
-            transaction open — for a caller staging several dedup lookups
-            that must succeed or fail together.
-        """
-        geometry_hash = _geometry_hash(symbols, coordinates, charge, spin)
-        stmt = select(cls).where(cls.geometry_hash == geometry_hash)
-        existing = db.exec_first(stmt)
-        if existing is not None:
-            return existing
-
-        row = cls(symbols=symbols, coordinates=coordinates, charge=charge, spin=spin)
-        db.add(row)
-        if commit:
-            db.commit()
-        else:
-            db.flush()
-        return row

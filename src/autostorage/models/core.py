@@ -1,18 +1,10 @@
 """Base row/link classes shared across all row modules."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Self, dataclass_transform
+from typing import Any, Self, dataclass_transform
 
 from sqlalchemy import inspect as sa_inspect
-from sqlmodel import Field, SQLModel, func, select
-
-from autostorage.exc import MissingPrimaryKeyError
-
-if TYPE_CHECKING:
-    from autostorage.database import Database
-
-    from .calc import ModelRow
-    from .geom import GeometryRow
+from sqlmodel import Field, SQLModel, func
 
 
 def _fk_field(target: str, *, nullable: bool = False, index: bool = True) -> Any:  # noqa: ANN401
@@ -59,33 +51,6 @@ class BaseResultRow(BaseRow):
     """Base for result models."""
 
     geometry_id: int | None
-
-    @classmethod
-    def query(
-        cls,
-        db: "Database",
-        *,
-        geo: "GeometryRow",
-        model: "ModelRow",
-        prov: dict[str, Any] | None = None,
-    ) -> Self | None:
-        """Query for result matching geometry, model, and provenance."""
-        from .calc import CalculationRow  # noqa: PLC0415
-
-        if not geo.id or not model.id:
-            raise MissingPrimaryKeyError([geo, model])
-
-        prov = prov or {}
-        stmt = (
-            select(cls)
-            .join(CalculationRow)
-            .where(
-                cls.geometry_id == geo.id,
-                CalculationRow.model_id == model.id,
-                CalculationRow.input_provenance == prov,
-            )
-        )
-        return db.exec_first(stmt)
 
 
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))

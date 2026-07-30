@@ -1,30 +1,15 @@
 """Reaction-related row definitions: stationary points, identities, stages, steps."""
 
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 
-from automol import Algorithm, Identity
-from sqlmodel import (
-    CheckConstraint,
-    Field,
-    Index,
-    Relationship,
-    UniqueConstraint,
-    func,
-    select,
-    text,
-)
+from automol import Identity
+from sqlmodel import CheckConstraint, Field, Index, Relationship, UniqueConstraint, text
 
-from autostorage.exc import MissingPrimaryKeyError
-from autostorage.types import CalcType
-
-from .calc import CalculationRow, ModelRow
 from .core import BaseRow, _fk_field
 from .link import StationaryIdentityLink, StationaryStageLink, StepValidationLink
 
 if TYPE_CHECKING:
-    from autostorage.database import Database
-
-    from .calc import ValidationRow
+    from .calc import CalculationRow, ValidationRow
     from .geom import GeometryRow
 
 
@@ -72,53 +57,6 @@ class StationaryPointRow(BaseRow, table=True):
         back_populates="stationaries", link_model=StationaryStageLink
     )
 
-    @classmethod
-    def query(
-        cls,
-        db: "Database",
-        *,
-        ident: Identity,
-        model: "ModelRow | None" = None,
-        prov: dict[Any, Any] | None = None,
-        calc_type: CalcType | None = None,
-    ) -> Self | None:
-        """Query for stationary point matching geometry, model, and provenance."""
-        stmt = (
-            select(cls)
-            .join(
-                StationaryIdentityLink,
-                cls.id == StationaryIdentityLink.stationary_id,  # ty:ignore[invalid-argument-type]
-            )
-            .join(
-                IdentityRow,
-                IdentityRow.id == StationaryIdentityLink.identity_id,  # ty:ignore[invalid-argument-type]
-            )
-            .where(
-                IdentityRow.kind == ident.kind,
-                IdentityRow.algorithm == ident.algorithm,
-                IdentityRow.value == ident.value,
-            )
-        )
-
-        if model or prov or calc_type:
-            stmt = stmt.join(
-                CalculationRow,
-                cls.calculation_id == CalculationRow.id,  # ty:ignore[invalid-argument-type]
-            )
-
-        if model:
-            if not model.id:
-                raise MissingPrimaryKeyError([model])
-            stmt = stmt.where(CalculationRow.model_id == model.id)
-
-        if prov:
-            stmt = stmt.where(CalculationRow.input_provenance == prov)
-
-        if calc_type:
-            stmt = stmt.where(CalculationRow.calc_type == calc_type)
-
-        return db.exec_first(stmt)
-
     def identity(
         self,
         *,
@@ -128,7 +66,7 @@ class StationaryPointRow(BaseRow, table=True):
         """Return the first loaded identity matching kind and/or algorithm.
 
         Searches `self.identities` (the already-loaded relationship list),
-        not the database — use `StationaryPointRow.query` for a DB lookup.
+        not the database.
         """
         return next(
             (
@@ -167,43 +105,6 @@ class IdentityRow(BaseRow, Identity, table=True):
         back_populates="identities", link_model=StationaryIdentityLink
     )
     identity_extras: list["IdentityExtraRow"] = Relationship(back_populates="identity")
-
-    @classmethod
-    def find_or_create(
-        cls,
-        db: "Database",
-        *,
-        algorithm: Algorithm,
-        value: str,
-        commit: bool = True,
-    ) -> Self:
-        """Return the matching identity row, creating and saving one if absent.
-
-        `kind` isn't a parameter here since it's fully determined by
-        `algorithm` (see `Identity.from_value`), so matching on
-        `(algorithm, value)` is equivalent to `unique_identity`'s full
-        `(kind, algorithm, value)` constraint.
-
-        Parameters
-        ----------
-        commit, optional
-            If True (default), commit a newly-created row immediately. If
-            False, only flush it (still assigns `.id`), leaving the caller's
-            transaction open — for a caller staging several dedup lookups
-            that must succeed or fail together.
-        """
-        stmt = select(cls).where(cls.algorithm == algorithm, cls.value == value)
-        existing = db.exec_first(stmt)
-        if existing is not None:
-            return existing
-
-        row = cls.from_value(value, algorithm=algorithm)
-        db.add(row)
-        if commit:
-            db.commit()
-        else:
-            db.flush()
-        return row
 
 
 class IdentityExtraRow(BaseRow, table=True):
@@ -270,62 +171,6 @@ class StageRow(BaseRow, table=True):
         }
     )
 
-    @classmethod
-    def query(
-        cls,
-        db: "Database",
-        stationaries: list["StationaryPointRow"],
-        *,
-        is_ts: bool = False,
-    ) -> Self | None:
-        """Query for existing stage with stationaries."""
-        target_ids = [s.id for s in stationaries]
-        if len(target_ids) != len(stationaries):
-            raise MissingPrimaryKeyError(list(stationaries))
-
-        stmt = (
-            select(cls)
-            .join(StationaryStageLink)
-            .where(cls.is_ts == is_ts)
-            .group_by(cls.id)  # ty:ignore[invalid-argument-type]
-            .having(
-                func.count(StationaryStageLink.stationary_id) == len(target_ids),  # ty:ignore[invalid-argument-type]
-                func.count(
-                    func.nullif(
-                        StationaryStageLink.stationary_id.in_(target_ids),  # ty:ignore[unresolved-attribute]
-                        False,  # noqa: FBT003
-                    )
-                )
-                == len(target_ids),
-            )
-        )
-        return db.exec_first(stmt)
-
-    @classmethod
-    def find_or_create(
-        cls,
-        db: "Database",
-        stationaries: list["StationaryPointRow"],
-        *,
-        is_ts: bool = False,
-    ) -> Self:
-        """Return the matching stage row, creating and saving one if absent.
-
-        Note
-        ----
-        Unlike `ModelRow`/`StepRow`, there is no DB-level uniqueness
-        constraint backing this dedup, so it relies entirely on
-        `StageRow.query`'s app-level lookup.
-        """
-        existing = cls.query(db, stationaries, is_ts=is_ts)
-        if existing is not None:
-            return existing
-
-        row = cls(stationaries=stationaries, is_ts=is_ts)
-        db.add(row)
-        db.commit()
-        return row
-
 
 class StepRow(BaseRow, table=True):
     """An elementary reaction step connecting a reactant, transition state, and product.
@@ -356,8 +201,7 @@ class StepRow(BaseRow, table=True):
         CheckConstraint("stage_id1 < stage_id2", name="chk_stage_order"),
         # `unq_step_stages` doesn't catch duplicate barrierless steps (stage_id_ts
         # NULL), since SQL never treats NULL as equal to itself in a unique
-        # constraint. This expression index closes that gap at the DB level,
-        # defense-in-depth alongside `StepRow.query`'s app-level lookup.
+        # constraint. This expression index closes that gap at the DB level.
         Index(
             "unq_step_stages_null_safe",
             "stage_id1",
@@ -405,46 +249,3 @@ class StepRow(BaseRow, table=True):
     stage_ts: "StageRow" = Relationship(
         sa_relationship_kwargs={"foreign_keys": "[StepRow.stage_id_ts]"}
     )
-
-    @classmethod
-    def query(
-        cls,
-        db: "Database",
-        stage1: "StageRow",
-        stage2: "StageRow",
-        stage_ts: "StageRow | None" = None,
-    ) -> Self | None:
-        """Query for an existing step connecting specific stages."""
-        if not stage1.id or not stage2.id or (stage_ts and not stage_ts.id):
-            raise MissingPrimaryKeyError(
-                [s for s in [stage1, stage2, stage_ts] if s is not None]
-            )
-
-        # Enforce the database CheckConstraint: stage_id1 < stage_id2
-        id1, id2 = sorted([stage1.id, stage2.id])
-        ts_id = stage_ts.id if stage_ts else None
-
-        stmt = select(cls).where(
-            cls.stage_id1 == id1,
-            cls.stage_id2 == id2,
-            cls.stage_id_ts == ts_id,
-        )
-        return db.exec_first(stmt)
-
-    @classmethod
-    def find_or_create(
-        cls,
-        db: "Database",
-        stage1: "StageRow",
-        stage2: "StageRow",
-        stage_ts: "StageRow | None" = None,
-    ) -> Self:
-        """Return the matching step row, creating and saving one if absent."""
-        existing = cls.query(db, stage1, stage2, stage_ts)
-        if existing is not None:
-            return existing
-
-        row = cls(stage1=stage1, stage2=stage2, stage_ts=stage_ts)
-        db.add(row)
-        db.commit()
-        return row

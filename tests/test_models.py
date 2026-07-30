@@ -5,7 +5,7 @@ from unittest import mock
 
 import numpy as np
 import pytest
-from automol import Algorithm, Identity
+from automol import Algorithm
 from numpy.random import Generator
 from scipy.spatial.transform import Rotation
 from sqlalchemy import inspect as sa_inspect
@@ -17,7 +17,6 @@ from autostorage import (
     CalculationGeometryLink,
     CalculationRow,
     Database,
-    EnergyRow,
     GeometryRow,
     GradientRow,
     HessianRow,
@@ -28,7 +27,7 @@ from autostorage import (
     TrajectoryRow,
     ValidationRow,
 )
-from autostorage.exc import DataIntegrityError, MissingPrimaryKeyError, ResultShapeError
+from autostorage.exc import DataIntegrityError, ResultShapeError
 from autostorage.models import CalculationTrajectoryLink
 from autostorage.types import Role
 
@@ -108,25 +107,6 @@ def test__row_updated_at_advances_on_update(database: Database) -> None:
     assert row.updated_at is not None
     assert row.created_at == created_at
     assert row.updated_at > updated_at
-
-
-def test__model_find_or_create_reuses_matching_row(database: Database) -> None:
-    """Test that find_or_create returns the same row for repeated calls."""
-    first = ModelRow.find_or_create(database, program="orca", method="xtb")
-    second = ModelRow.find_or_create(database, program="orca", method="xtb")
-
-    assert first.id is not None
-    assert first.id == second.id
-
-
-def test__model_find_or_create_distinguishes_basis(database: Database) -> None:
-    """Test that find_or_create treats a differing basis as a distinct model."""
-    no_basis = ModelRow.find_or_create(database, program="orca", method="xtb")
-    with_basis = ModelRow.find_or_create(
-        database, program="orca", method="xtb", basis="def2-svp"
-    )
-
-    assert no_basis.id != with_basis.id
 
 
 def test__model_null_safe_index_catches_duplicate(database: Database) -> None:
@@ -323,33 +303,10 @@ def test__geometry_charge_and_spin_remain_mutable(
     assert fetched.spin == 1
 
 
-def test__geometry_find_or_create_reuses_matching_row(
-    database: Database, geometry_row: GeometryRow
-) -> None:
-    """Test that find_or_create returns the same row for repeated calls."""
-    first = GeometryRow.find_or_create(
-        database,
-        symbols=list(geometry_row.symbols),
-        coordinates=np.array(geometry_row.coordinates),
-        charge=geometry_row.charge,
-        spin=geometry_row.spin,
-    )
-    second = GeometryRow.find_or_create(
-        database,
-        symbols=list(geometry_row.symbols),
-        coordinates=np.array(geometry_row.coordinates),
-        charge=geometry_row.charge,
-        spin=geometry_row.spin,
-    )
-
-    assert first.id is not None
-    assert first.id == second.id
-
-
 def test__geometry_unique_hash_catches_direct_duplicate_insert(
     database: Database, geometry_row: GeometryRow
 ) -> None:
-    """Test that a direct duplicate insert (bypassing find_or_create) is rejected."""
+    """Test that a direct duplicate insert of identical geometry content is rejected."""
     duplicate = GeometryRow(
         symbols=list(geometry_row.symbols),
         coordinates=np.array(geometry_row.coordinates),
@@ -440,62 +397,6 @@ def test__hessian_frequency_cache_invalidated_on_value_update(
     database.commit()
 
     assert hessian.harmonic_frequencies != original_frequencies
-
-
-def test__result_query(
-    database: Database,
-    calculation_row: CalculationRow,
-    geometry_row: GeometryRow,
-    calc_geo_link: CalculationGeometryLink,
-    rng: Generator,
-) -> None:
-    """Test querying of result tables."""
-    database.add(calculation_row)
-    database.add(geometry_row)
-    database.add(calc_geo_link)
-    database.commit()
-
-    n = geometry_row.to_geometry().atom_count
-    hess = HessianRow(
-        calculation=calculation_row,
-        geometry=geometry_row,
-        value=rng.uniform(size=(3 * n, 3 * n)),
-    )
-    database.add(hess)
-
-    database.commit()
-
-    hess2 = HessianRow.query(database, geo=geometry_row, model=calculation_row.model)
-    assert hess2
-    assert hess2.id == hess.id
-
-
-def test__provenance_query_matches_regardless_of_dict_key_order(
-    database: Database, geometry_row: GeometryRow, model_row: ModelRow
-) -> None:
-    """Test that provenance-filtered queries ignore dict key insertion order.
-
-    SQLite JSON columns compare by exact serialized text, so two dicts built with
-    different key insertion order would previously fail to match even though
-    they're equal in Python; `Database`'s `json_serializer` canonicalizes key
-    order on write to fix this.
-    """
-    calculation = CalculationRow(
-        model=model_row, calc_type=CalcType.ENERGY, input_provenance={"b": 1, "a": 2}
-    )
-    database.add(calculation)
-    database.add(geometry_row)
-    database.commit()
-
-    energy = EnergyRow(calculation=calculation, geometry=geometry_row, value=-1.0)
-    database.add(energy)
-    database.commit()
-
-    found = EnergyRow.query(
-        database, geo=geometry_row, model=model_row, prov={"a": 2, "b": 1}
-    )
-    assert found
-    assert found.id == energy.id
 
 
 def test__stationary_inchi(
@@ -680,140 +581,10 @@ def test__hessian_delete_leaves_is_valid_untouched_when_no_hessians_remain(
     assert stationary.is_valid
 
 
-def test__stationary_query(
-    database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test querying of stationary points."""
-    database.add(calculation_row)
-    database.add(geometry_row)
-    database.commit()
-
-    stationary = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    database.add(stationary)
-
-    ident = Identity.from_geometry(
-        geo=geometry_row.to_geometry(), algorithm=Algorithm.RDKIT_INCHI
-    )
-    stationary2 = StationaryPointRow.query(
-        database, ident=ident, model=calculation_row.model
-    )
-
-    assert stationary2
-    assert stationary2.id == stationary.id
-
-
-def test__invalid_stationary_query(
-    database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test invalid querying of stationary points."""
-    ident = Identity.from_geometry(
-        geo=geometry_row.to_geometry(), algorithm=Algorithm.RDKIT_INCHI
-    )
-    with pytest.raises(MissingPrimaryKeyError):
-        StationaryPointRow.query(database, ident=ident, model=calculation_row.model)
-
-
-def test__stage_and_step_query(
-    database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test querying of stages and steps built on the chainable Query API."""
-    database.add(calculation_row)
-    database.add(geometry_row)
-    database.commit()
-
-    stationary1 = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    stationary2 = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    database.add(stationary1)
-    database.add(stationary2)
-    database.commit()
-
-    stage1 = StageRow(stationaries=[stationary1])
-    stage2 = StageRow(stationaries=[stationary2])
-    database.add(stage1)
-    database.add(stage2)
-    database.commit()
-
-    stage_match = StageRow.query(database, [stationary1])
-    assert stage_match
-    assert stage_match.id == stage1.id
-
-    step = StepRow(stage1=stage1, stage2=stage2)
-    database.add(step)
-    database.commit()
-
-    step_match = StepRow.query(database, stage1, stage2)
-    assert step_match
-    assert step_match.id == step.id
-
-
-def test__stage_find_or_create_reuses_matching_row(
-    database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test that find_or_create returns the same row for repeated calls."""
-    database.add(calculation_row)
-    database.add(geometry_row)
-    database.commit()
-
-    stationary = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    database.add(stationary)
-    database.commit()
-
-    first = StageRow.find_or_create(database, [stationary])
-    second = StageRow.find_or_create(database, [stationary])
-
-    assert first.id is not None
-    assert first.id == second.id
-
-
-def test__stage_find_or_create_distinguishes_is_ts(
-    database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test that find_or_create treats differing is_ts as distinct stages."""
-    database.add(calculation_row)
-    database.add(geometry_row)
-    database.commit()
-
-    stationary = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    database.add(stationary)
-    database.commit()
-
-    non_ts = StageRow.find_or_create(database, [stationary], is_ts=False)
-    ts = StageRow.find_or_create(database, [stationary], is_ts=True)
-
-    assert non_ts.id != ts.id
-
-
-def test__step_find_or_create_reuses_matching_row(
-    database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
-) -> None:
-    """Test that find_or_create returns the same row for repeated calls."""
-    database.add(calculation_row)
-    database.add(geometry_row)
-    database.commit()
-
-    stationary1 = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    stationary2 = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
-    database.add(stationary1)
-    database.add(stationary2)
-    database.commit()
-
-    stage1 = StageRow(stationaries=[stationary1])
-    stage2 = StageRow(stationaries=[stationary2])
-    database.add(stage1)
-    database.add(stage2)
-    database.commit()
-
-    first = StepRow.find_or_create(database, stage1, stage2)
-    second = StepRow.find_or_create(database, stage1, stage2)
-
-    assert first.id is not None
-    assert first.id == second.id
-
-
 def test__step_null_safe_index_catches_barrierless_duplicate(
     database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
 ) -> None:
-    """Test that a direct duplicate barrierless step (bypassing StepRow.query) fails.
+    """Test that a direct duplicate barrierless step insert fails.
 
     `unq_step_stages` alone doesn't catch this, since `stage_id_ts` is NULL for
     both rows and SQL treats NULL as distinct from itself; `unq_step_stages_null_safe`
