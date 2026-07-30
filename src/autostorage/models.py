@@ -25,9 +25,6 @@ from sqlmodel import (
     select,
 )
 from sqlmodel.main import SQLModelConfig
-from stereomolgraph.algorithms.symmetry import (
-    symmetry_number as _stereo_symmetry_number,
-)
 
 from autostorage.exc import MissingPrimaryKeyError
 
@@ -167,7 +164,7 @@ def _geometry_hash(
 
 
 # Geometry table
-class GeometryRow(BaseRow, Geometry, table=True):
+class GeometryRow(BaseRow, table=True):
     """Molecular geometry definition and metadata.
 
     Attributes
@@ -199,6 +196,7 @@ class GeometryRow(BaseRow, Geometry, table=True):
 
     __tablename__ = "geometry"
     __table_args__ = (UniqueConstraint("geometry_hash", name="unique_geometry_hash"),)
+    model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
     symbols: list[str] = Field(sa_column=Column(JSON))
     coordinates: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
@@ -219,14 +217,14 @@ class GeometryRow(BaseRow, Geometry, table=True):
         back_populates="geometry"
     )
 
-    @cached_property
-    def symmetry_number(self) -> int:
-        """Symmetry number from stereo-preserving graph automorphisms.
-
-        Cached per instance since counting graph isomorphisms is expensive.
-        """
-        graph = geom.stereo_mol_graph(self)
-        return _stereo_symmetry_number(graph)
+    def to_geometry(self) -> Geometry:
+        """Convert to an automol Geometry instance."""
+        return Geometry(
+            symbols=self.symbols,
+            coordinates=self.coordinates,
+            charge=self.charge,
+            spin=self.spin,
+        )
 
     @classmethod
     def find_or_create(  # noqa: PLR0913
@@ -363,7 +361,9 @@ class HessianRow(BaseResultRow, table=True):
         every relevant flush) depends on it. Invalidated on `value` update
         by `invalidate_hessian_frequency_cache` in `events.py`.
         """
-        freqs, _ = geom.vibrational_analysis(geo=self.geometry, hess=self.value)
+        freqs, _ = geom.vibrational_analysis(
+            geo=self.geometry.to_geometry(), hess=self.value
+        )
         return freqs
 
     @property

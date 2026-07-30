@@ -395,7 +395,7 @@ def test__hessian_properties(
     database.add(geometry_row)
     database.add(calc_geo_link)
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hessian = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -423,7 +423,7 @@ def test__hessian_frequency_cache_invalidated_on_value_update(
     database.add(geometry_row)
     database.add(calc_geo_link)
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hessian = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -442,25 +442,6 @@ def test__hessian_frequency_cache_invalidated_on_value_update(
     assert hessian.harmonic_frequencies != original_frequencies
 
 
-def test__geometry_symmetry_number() -> None:
-    """Test that symmetry_number is computed from a geometry's point group.
-
-    Uses a properly symmetric (C2v) water geometry -- unlike `geometry_row`,
-    whose bond lengths/angle are arbitrary and so has no symmetry to detect --
-    to guard against a broken computation silently returning 1 for everything.
-    """
-    oh = 0.9584
-    angle = np.radians(104.45)
-    o = np.array([0.0, 0.0, 0.0])
-    h1 = np.array([0.0, oh * np.sin(angle / 2), oh * np.cos(angle / 2)])
-    h2 = np.array([0.0, -oh * np.sin(angle / 2), oh * np.cos(angle / 2)])
-    water = GeometryRow(
-        symbols=["O", "H", "H"], coordinates=np.array([o, h1, h2]), charge=0, spin=0
-    )
-    expected_symmetry_number = 2
-    assert water.symmetry_number == expected_symmetry_number
-
-
 def test__result_query(
     database: Database,
     calculation_row: CalculationRow,
@@ -474,7 +455,7 @@ def test__result_query(
     database.add(calc_geo_link)
     database.commit()
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hess = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -593,7 +574,7 @@ def test__stationary_order_hessian_first(
     database.add(calculation_row)
     database.add(geometry_row)
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hessian_row = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -627,7 +608,7 @@ def test__stationary_order_hessian_second(
     database.add(stationary)
     assert stationary.is_valid
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hessian_row = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -647,7 +628,7 @@ def test__hessian_delete_leaves_is_valid_correct_with_remaining_hessian(
     database.add(geometry_row)
     database.commit()
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hessian1 = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -680,7 +661,7 @@ def test__hessian_delete_leaves_is_valid_untouched_when_no_hessians_remain(
     database.add(geometry_row)
     database.commit()
 
-    n = geometry_row.atom_count
+    n = geometry_row.to_geometry().atom_count
     hessian = HessianRow(
         calculation=calculation_row,
         geometry=geometry_row,
@@ -710,7 +691,9 @@ def test__stationary_query(
     stationary = StationaryPointRow(calculation=calculation_row, geometry=geometry_row)
     database.add(stationary)
 
-    ident = Identity.from_geometry(geo=geometry_row, algorithm=Algorithm.RDKIT_INCHI)
+    ident = Identity.from_geometry(
+        geo=geometry_row.to_geometry(), algorithm=Algorithm.RDKIT_INCHI
+    )
     stationary2 = StationaryPointRow.query(
         database, ident=ident, model=calculation_row.model
     )
@@ -723,7 +706,9 @@ def test__invalid_stationary_query(
     database: Database, calculation_row: CalculationRow, geometry_row: GeometryRow
 ) -> None:
     """Test invalid querying of stationary points."""
-    ident = Identity.from_geometry(geo=geometry_row, algorithm=Algorithm.RDKIT_INCHI)
+    ident = Identity.from_geometry(
+        geo=geometry_row.to_geometry(), algorithm=Algorithm.RDKIT_INCHI
+    )
     with pytest.raises(MissingPrimaryKeyError):
         StationaryPointRow.query(database, ident=ident, model=calculation_row.model)
 

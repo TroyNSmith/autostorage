@@ -51,7 +51,7 @@ def verify_gradient_shape(
     if geometry is None:
         return
 
-    expected = (3 * geometry.atom_count,)
+    expected = (3 * geometry.to_geometry().atom_count,)
     actual = np.shape(target.value)
 
     if actual != expected:
@@ -70,7 +70,7 @@ def verify_hessian_shape(
     if geometry is None:
         return
 
-    expected_dim = 3 * geometry.atom_count
+    expected_dim = 3 * geometry.to_geometry().atom_count
     expected = (expected_dim, expected_dim)
     actual = np.shape(target.value)
 
@@ -230,7 +230,7 @@ def add_inchi_identities(session: Session, flush_context: Any, instances: Any) -
             continue
         try:
             inchi = IdentityRow.from_geometry(
-                geo=geometry, algorithm=Algorithm.RDKIT_INCHI
+                geo=geometry.to_geometry(), algorithm=Algorithm.RDKIT_INCHI
             )
             pending_items.append((obj, inchi, geometry))
             inchi_lookups.append((inchi.algorithm, inchi.value))
@@ -260,7 +260,7 @@ def add_inchi_identities(session: Session, flush_context: Any, instances: Any) -
 
         try:
             smiles = IdentityRow.from_geometry(
-                geometry, algorithm=Algorithm.RDKIT_SMILES
+                geometry.to_geometry(), algorithm=Algorithm.RDKIT_SMILES
             )
             smiles_extra = IdentityExtraRow(
                 identity=inchi, attribute="smiles", value=smiles.value
@@ -290,7 +290,9 @@ def _matching_conformer_identity(
     if not resolved_peers:
         return None
 
-    matches = geom.is_duplicate_conformer(geometry, [g for _, g in resolved_peers])
+    matches = geom.is_duplicate_conformer(
+        geometry.to_geometry(), [g.to_geometry() for _, g in resolved_peers]
+    )
     match_idx = next((i for i, m in enumerate(matches) if m), None)
     if match_idx is None:
         return None
