@@ -8,7 +8,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-import click
 from sqlalchemy import Select, create_engine, event
 from sqlalchemy import select as sa_select
 from sqlalchemy.exc import MultipleResultsFound, NoResultFound
@@ -16,8 +15,6 @@ from sqlalchemy.orm import Session
 
 # Ensure all modules are loaded with the database
 from .events import *  # noqa: F403
-from .merge import MergeReport
-from .merge import merge_databases as _merge_databases
 from .models import *  # noqa: F403
 from .models import SQLModel
 
@@ -125,19 +122,6 @@ class Database:
             session.commit()
             return merged
 
-    def merge_from(self, source_db: "Database", *, commit: bool = True) -> MergeReport:
-        """Merge another database's contents into this one.
-
-        Unlike `merge()` (a same-session upsert of a single row), this
-        copies every row from a separate `source_db` into this database,
-        remapping ids/foreign keys and deduplicating content-unique rows.
-
-        See Also
-        --------
-        autostorage.merge
-        """
-        return _merge_databases(target=self, source=source_db, commit=commit)
-
     def flush(self) -> None:
         """Flush pending changes to the database without committing.
 
@@ -229,23 +213,3 @@ class Database:
         if exc_type is not None:
             self._session.rollback()
         self.close()
-
-
-@click.command(name="autostorage-merge")
-@click.argument("target", type=click.Path(path_type=Path))
-@click.argument("source", type=click.Path(path_type=Path))
-def merge_databases(target: Path, source: Path) -> None:
-    """Merge one on-disk database's contents into another, as a CLI command.
-
-    Installed as the ``autostorage-merge`` console script (see ``[project.scripts]`` in
-    ``pyproject.toml``); also runnable via ``python -m autostorage.database``.
-    """
-    with Database(target) as target_db, Database(source) as source_db:
-        report = _merge_databases(target=target_db, source=source_db)
-
-    click.echo(f"Copied: {report.copied}")
-    click.echo(f"Reused: {report.reused}")
-
-
-if __name__ == "__main__":
-    merge_databases()

@@ -209,8 +209,8 @@ def compute_geometry_hash(
     flag_modified(target, "geometry_hash")
 
 
-# Identity algorithms managed here, so other code (e.g. `merge.py`) knows not to
-# copy/attach them explicitly.
+# Identity algorithms managed here, so other code knows not to copy/attach them
+# explicitly.
 AUTO_MANAGED_IDENTITY_ALGORITHMS: frozenset[Algorithm] = frozenset(
     {Algorithm.RDKIT_INCHI, Algorithm.IRMSD}
 )
