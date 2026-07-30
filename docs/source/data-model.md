@@ -98,17 +98,3 @@ why some of these are registered at the session level rather than per-model.
   satisfy the `stage_id1 < stage_id2` check constraint), `is_barrierless` is derived from
   whether `stage_id_ts` is set, and `stage1`/`stage2` are rejected if they reference a
   transition-state stage (and vice versa for `stage_ts`).
-
-## Migrations
-
-`migrations/` holds Alembic migrations, wired to `SQLModel.metadata`. This only applies to
-evolving an *existing* on-disk database in place — fresh or in-memory `Database` instances
-(including every test) get their schema from `SQLModel.metadata.create_all` directly, no
-migration involved.
-
-Any change to a `table=True` model's columns/constraints/indexes needs a matching Alembic
-revision. SQLite can't reflect the expression-based null-safe unique indexes on
-`ModelRow`/`StepRow` (e.g. `unique_model_null_safe`, `unq_step_stages_null_safe`), so
-`alembic revision --autogenerate` silently skips those — they must be added to new migrations
-by hand if those models are ever touched again. See [Migrations](migrations.md) for the full
-workflow.

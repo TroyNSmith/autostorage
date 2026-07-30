@@ -1,10 +1,11 @@
 """Merge one database's contents into another, with validation at merge time."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlalchemy import func, select
 from sqlalchemy import inspect as sa_inspect
-from sqlmodel import SQLModel, func, select
 
 from .events import AUTO_MANAGED_IDENTITY_ALGORITHMS
 from .models import (
@@ -12,6 +13,7 @@ from .models import (
     IdentityExtraRow,
     IdentityRow,
     ModelRow,
+    SQLModel,
     StationaryIdentityLink,
 )
 
@@ -238,7 +240,7 @@ def _copy_row(
 
 def _copy_table(
     cls: type[SQLModel],
-    rows: list[SQLModel],
+    rows: Sequence[SQLModel],
     *,
     target: "Database",
     id_map: dict[type[SQLModel], dict[int, int]],
@@ -263,7 +265,7 @@ def _copy_table(
 
 def _table_count(db: "Database", cls: type[SQLModel]) -> int:
     """Return the number of rows currently in `cls`'s table."""
-    return db.exec_first(select(func.count()).select_from(cls)) or 0
+    return db.exec_first(select(func.count()).select_from(cls)) or 0  # ty:ignore[invalid-argument-type]
 
 
 def _copy_models(
@@ -359,7 +361,7 @@ def _copy_identities(
     handled = 0
     for row in rows:
         if row.algorithm in AUTO_MANAGED_IDENTITY_ALGORITHMS:
-            skipped_ids.add(row.id)
+            skipped_ids.add(row.id)  # ty:ignore[invalid-argument-type]
             continue
         handled += 1
         new_row = IdentityRow.find_or_create(

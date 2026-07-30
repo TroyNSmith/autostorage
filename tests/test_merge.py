@@ -7,8 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from automol import Algorithm
-from sqlalchemy import text
-from sqlmodel import SQLModel, select
+from sqlalchemy import select, text
 
 from autostorage import (
     CalculationRow,
@@ -24,7 +23,7 @@ from autostorage import (
 )
 from autostorage.exc import ResultShapeError
 from autostorage.merge import _fk_targets, _ordered_models
-from autostorage.models import StationaryIdentityLink
+from autostorage.models import SQLModel, StationaryIdentityLink
 from autostorage.types import CalcType, CompressedArrayTypeDecorator
 
 
@@ -199,7 +198,7 @@ def test__multi_tier_fk_remapping(target: Database, source: Database) -> None:
     merged_geometries = {
         stationary.geometry.coordinates.tobytes()
         for stage_id in (merged_step.stage_id1, merged_step.stage_id2)
-        for stationary in target.get(StageRow, stage_id).stationaries
+        for stationary in target.get(StageRow, stage_id).stationaries  # ty:ignore[invalid-argument-type]
     }
     assert merged_geometries == {
         geometry1.coordinates.tobytes(),

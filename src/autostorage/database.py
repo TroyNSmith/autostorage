@@ -9,21 +9,21 @@ from types import TracebackType
 from typing import Self
 
 import click
-from sqlalchemy import event
+from sqlalchemy import Select, create_engine, event
 from sqlalchemy import select as sa_select
 from sqlalchemy.exc import MultipleResultsFound, NoResultFound
-from sqlmodel import Session, SQLModel, create_engine
-from sqlmodel.sql.expression import Select, SelectOfScalar
+from sqlalchemy.orm import Session
 
 # Ensure all modules are loaded with the database
 from .events import *  # noqa: F403
 from .merge import MergeReport
 from .merge import merge_databases as _merge_databases
 from .models import *  # noqa: F403
+from .models import SQLModel
 
-type SelectStatement[T] = Select[T] | SelectOfScalar[T]
+type SelectStatement[T] = Select[tuple[T]]
 
-__all__ = ["Database", "Select", "SelectOfScalar", "SelectStatement"]
+__all__ = ["Database", "Select", "SelectStatement"]
 
 
 class Database:
@@ -182,13 +182,13 @@ class Database:
     def exec_first[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> RowT | None:
         """Return the first match to a statement."""
         with self.session() as session:
-            return session.exec(stmt).first()
+            return session.scalars(stmt).first()
 
     def exec_one[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> RowT:
         """Return the single match to a statement."""
         with self.session() as session:
             try:
-                return session.exec(stmt).one()
+                return session.scalars(stmt).one()
             except NoResultFound as exc:
                 msg = f"No row found matching {stmt}."
                 raise LookupError(msg) from exc
@@ -199,7 +199,7 @@ class Database:
     def exec_all[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> list[RowT]:
         """Return all matches to a statement."""
         with self.session() as session:
-            return list(session.exec(stmt).all())
+            return list(session.scalars(stmt).all())
 
     def exists[RowT: SQLModel](self, stmt: SelectStatement[RowT]) -> bool:
         """Return whether any row matches a statement.
@@ -208,9 +208,7 @@ class Database:
         row is never materialized.
         """
         with self.session() as session:
-            return bool(
-                session.exec(sa_select(stmt.exists())).scalar()  # ty:ignore[no-matching-overload]
-            )
+            return bool(session.scalar(sa_select(stmt.exists())))
 
     def close(self) -> None:
         """Close the database connection."""

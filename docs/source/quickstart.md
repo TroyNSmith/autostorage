@@ -70,16 +70,6 @@ with Database("workflow.db") as db:
     ...
 ```
 
-## Migrating an existing database
-
-Fresh or in-memory `Database` instances get their schema from `SQLModel.metadata.create_all`
-automatically — no migration step needed. For an existing on-disk database, apply
-[Alembic](https://alembic.sqlalchemy.org/) migrations with:
-
-```bash
-AUTOSTORAGE_DATABASE_URL=sqlite:///path/to.db pixi run migrate
-```
-
 See [Data model](data-model.md) for the schema this creates, [Database](database.md) for the
 full `Database` method surface, [Events](events.md) for the automatic validation/enrichment
 behavior that runs on every flush, and the {doc}`API reference <apidocs/index>` for full details

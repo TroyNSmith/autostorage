@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+### Removed
+
+- **Alembic migrations** (`migrations/`, `alembic.ini`, `tests/test_migrations.py`, `pixi run migrate`): Removed for now; `alembic` remains a dev dependency for when migrations are reintroduced. Schema for fresh/in-memory `Database` instances is unaffected, still built via `create_all()`.
 
 ## [0.0.12] - 2026-07-23
 ### Added

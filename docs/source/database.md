@@ -25,8 +25,7 @@ CASCADE` behavior the schema relies on (see [Link tables](data-model.md#link-tab
 on this being set.
 
 `__init__` also calls `SQLModel.metadata.create_all(self.engine)`, so a fresh or in-memory
-`Database` gets its full schema immediately — no Alembic migration is involved for these cases.
-See [Migrations](migrations.md) for evolving an *existing* on-disk database instead.
+`Database` gets its full schema immediately.
 
 ### JSON key ordering
 

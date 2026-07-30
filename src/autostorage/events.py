@@ -5,11 +5,10 @@ from typing import Any
 
 import numpy as np
 from automol import Algorithm, geom
-from sqlalchemy import event, tuple_
+from sqlalchemy import Integer, cast, event, func, select, tuple_
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Mapper, object_session
+from sqlalchemy.orm import Mapper, Session, object_session
 from sqlalchemy.orm.attributes import flag_modified, get_history
-from sqlmodel import Integer, Session, cast, func, select
 
 from .exc import DataIntegrityError, ResultShapeError
 from .models import (
@@ -244,7 +243,7 @@ def add_inchi_identities(session: Session, flush_context: Any, instances: Any) -
     stmt = select(IdentityRow).where(
         tuple_(IdentityRow.algorithm, IdentityRow.value).in_(inchi_lookups)  # ty:ignore[invalid-argument-type]
     )
-    existing_rows = session.exec(stmt).all()
+    existing_rows = session.scalars(stmt).all()
 
     identity_map = {(r.algorithm, r.value): r for r in existing_rows}
 
@@ -330,11 +329,11 @@ def assign_conformer_ids(session: Session, flush_context: Any, instances: Any) -
         if next_group_id is None:
             # Assumes single-writer; concurrent writers rely on the DB's uniqueness
             # constraint to fail one session's commit instead.
-            current_max = session.exec(
+            current_max = session.scalar(
                 select(func.max(cast(IdentityRow.value, Integer))).where(
-                    IdentityRow.kind == Algorithm.IRMSD.kind
+                    IdentityRow.kind == Algorithm.IRMSD.kind  # ty:ignore[invalid-argument-type]
                 )
-            ).first()
+            )
             next_group_id = (current_max or 0) + 1
         else:
             next_group_id += 1

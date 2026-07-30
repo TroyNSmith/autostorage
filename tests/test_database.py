@@ -2,9 +2,8 @@
 
 import pytest
 from numpy.random import Generator
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
 
 from autostorage import (
     CalculationGeometryLink,
@@ -13,7 +12,7 @@ from autostorage import (
     GeometryRow,
     GradientRow,
 )
-from autostorage.database import ModelRow, Select, SelectStatement
+from autostorage.database import ModelRow, SelectStatement
 from autostorage.exc import ResultShapeError
 
 
@@ -91,7 +90,7 @@ def test__delete(database: Database, model_row: ModelRow) -> None:
 @pytest.fixture
 def orca_model_statement() -> SelectStatement:
     """Fixture for Statement."""
-    return Select(ModelRow).where(ModelRow.program == "ORCA")
+    return select(ModelRow).where(ModelRow.program == "ORCA")  # ty:ignore[invalid-argument-type]
 
 
 def test__exec_first(
@@ -139,7 +138,7 @@ def test__exists_true_and_false(
     database.commit()
 
     assert database.exists(orca_model_statement) is True
-    missing_stmt = select(ModelRow).where(ModelRow.program == "nonexistent")
+    missing_stmt = select(ModelRow).where(ModelRow.program == "nonexistent")  # ty:ignore[invalid-argument-type]
     assert database.exists(missing_stmt) is False
 
 
@@ -148,12 +147,12 @@ def test__select_statement_chaining(database: Database, model_row: ModelRow) -> 
     database.add(model_row)
     database.commit()
 
-    stmt = select(ModelRow).where(ModelRow.program == "ORCA")
+    stmt = select(ModelRow).where(ModelRow.program == "ORCA")  # ty:ignore[invalid-argument-type]
     assert database.exec_first(stmt) == model_row
     assert database.exec_one(stmt) == model_row
     assert list(database.exec_all(stmt))
 
-    missing_stmt = select(ModelRow).where(ModelRow.program == "nonexistent")
+    missing_stmt = select(ModelRow).where(ModelRow.program == "nonexistent")  # ty:ignore[invalid-argument-type]
     assert database.exec_first(missing_stmt) is None
 
 

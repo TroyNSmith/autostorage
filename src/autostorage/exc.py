@@ -2,8 +2,6 @@
 
 from typing import Self
 
-from sqlmodel import SQLModel
-
 __all__ = ["DataIntegrityError", "MissingPrimaryKeyError", "ResultShapeError"]
 
 
@@ -15,7 +13,7 @@ class ResultShapeError(Exception):
     """Raise when a result violates expected shape."""
 
     def __init__(
-        self: Self, model: SQLModel, actual: tuple[int, ...], expected: tuple[int, ...]
+        self: Self, model: object, actual: tuple[int, ...], expected: tuple[int, ...]
     ) -> None:
         """Initialize exception."""
         class_name = model.__class__.__name__
@@ -26,7 +24,7 @@ class ResultShapeError(Exception):
 class MissingPrimaryKeyError(Exception):
     """Raise when primary keys weren't provided to a query method."""
 
-    def __init__(self: Self, rows: list[SQLModel]) -> None:
+    def __init__(self: Self, rows: list[object]) -> None:
         row_ids = [
             f"{row.__class__.__name__}: {getattr(row, 'id', None)}" for row in rows
         ]

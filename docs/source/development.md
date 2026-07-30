@@ -36,8 +36,6 @@ are invoked as `pixi run <task>` (task definitions live in `pixi.toml` under
   - Runs all of the above in order, then checks the working tree is clean.
 * - `pixi run cov-view`
   - Opens the HTML coverage report (`htmlcov/index.html`) in `$BROWSER`.
-* - `pixi run migrate`
-  - Applies Alembic migrations to an existing on-disk database — see [Migrations](migrations.md).
 ```
 
 A single test:
@@ -60,9 +58,6 @@ pixi run -e dev pytest tests/test_models.py::test_name
   (`Database(":memory:")`, closed on teardown), a seeded `rng`, and baseline `model_row`/
   `geometry_row`/`calculation_row`/`calc_geo_link` fixtures used across `test_models.py` and
   `test_database.py`.
-- `tests/test_migrations.py` is a smoke test that Alembic's `upgrade head` reproduces exactly
-  the schema `SQLModel.metadata.create_all` would build — see
-  [Keeping migrations and models in sync](migrations.md#keeping-migrations-and-models-in-sync).
 
 ## Pre-commit pipeline
 

@@ -18,7 +18,6 @@ quickstart
 data-model
 database
 events
-migrations
 development
 apidocs/index
 :::
