@@ -69,7 +69,7 @@ def test__link_create_rejects_ambiguous_row_type(
         rel for rel in real_relationships if rel.key == "geometry"
     )
 
-    with mock.patch("autostorage.models.sa_inspect") as mock_inspect:
+    with mock.patch("autostorage.models.core.sa_inspect") as mock_inspect:
         mock_inspect.return_value.relationships = [
             *real_relationships,
             duplicate_geometry_rel,
