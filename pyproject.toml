@@ -9,8 +9,6 @@ requires-python = ">= 3.12"
 dependencies = [
     "automol==0.0.19",
     "click>=8.0",
-    "matplotlib>=3.8",
-    "pint>=0.25.2",
     "sqlmodel>=0.0.31",
     "irmsd>=0.1.1",
     "stereomolgraph>=0.0.22b0",
@@ -70,7 +68,6 @@ exclude_type_checking_imports = true
 name = "Autostorage Layering"
 type = "layers"
 layers = [
-    "autostorage.utils",
     "autostorage.database",
     "autostorage.merge",
     "autostorage.events",

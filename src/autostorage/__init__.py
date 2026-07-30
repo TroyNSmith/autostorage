@@ -2,7 +2,7 @@
 
 __version__ = "0.0.12"
 
-from . import exc, merge, types, utils
+from . import exc, merge, types
 from .database import Database
 from .merge import MergeReport
 from .models import (
@@ -46,5 +46,4 @@ __all__ = [
     "exc",
     "merge",
     "types",
-    "utils",
 ]
