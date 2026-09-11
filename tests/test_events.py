@@ -1,6 +1,7 @@
 """Tests for SQLAlchemy ORM event listeners."""
 
 import tempfile
+import uuid
 from collections.abc import Callable, Generator
 from pathlib import Path
 
@@ -971,7 +972,7 @@ class TestVerifyTrajectoryGeometryNdim:
         """Link with None trajectory is skipped gracefully."""
         with database.session() as session:
             link = GeometryTrajectoryLink(
-                geometry_id=1,  # Will be invalid but event shouldn't crash
+                geometry_id=uuid.uuid4(),  # Will be invalid but event shouldn't crash
                 trajectory_id=None,
                 index=None,
             )

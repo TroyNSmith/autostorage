@@ -1,5 +1,6 @@
 """SQLModel row definitions for autostorage's schema."""
 
+import uuid
 from typing import Any
 
 import numpy as np
@@ -54,7 +55,7 @@ class CalculationGeometryLink(SQLModel, table=True):
         Index("ix_calculation_geometry_link_calculation_id", "calculation_id"),
     )
 
-    geometry_id: int | None = Field(
+    geometry_id: uuid.UUID | None = Field(
         default=None,
         foreign_key="geometry.id",
         ondelete="CASCADE",
@@ -98,7 +99,7 @@ class GeometryTrajectoryLink(SQLModel, table=True):
         Index("ix_geometry_trajectory_link_trajectory_id", "trajectory_id"),
     )
 
-    geometry_id: int | None = Field(
+    geometry_id: uuid.UUID | None = Field(
         default=None,
         foreign_key="geometry.id",
         primary_key=True,
@@ -291,7 +292,7 @@ class GeometryRow(SQLModel, Geometry, table=True):
     __tablename__ = "geometry"
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
     symbols: list[str] = Field(sa_column=Column(JSON))
     coordinates: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
     charge: int
@@ -469,7 +470,7 @@ class EnergyRow(SQLModel, table=True):
     __tablename__ = "energy"
 
     id: int | None = Field(default=None, primary_key=True)
-    geometry_id: int | None = _fk_field("geometry.id")
+    geometry_id: uuid.UUID | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
     value: float
 
@@ -500,7 +501,7 @@ class GradientRow(SQLModel, table=True):
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
     id: int | None = Field(default=None, primary_key=True)
-    geometry_id: int | None = _fk_field("geometry.id")
+    geometry_id: uuid.UUID | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
     value: FloatArray = Field(sa_column=Column(CompressedArrayTypeDecorator()))
 
@@ -531,7 +532,7 @@ class HessianRow(SQLModel, table=True):
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
     id: int | None = Field(default=None, primary_key=True)
-    geometry_id: int | None = _fk_field("geometry.id")
+    geometry_id: uuid.UUID | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
 
     value: np.ndarray = Field(
@@ -606,7 +607,7 @@ class StationaryPointRow(SQLModel, table=True):
     __tablename__ = "stationary_point"
 
     id: int | None = Field(default=None, primary_key=True)
-    geometry_id: int | None = _fk_field("geometry.id")
+    geometry_id: uuid.UUID | None = _fk_field("geometry.id")
     calculation_id: int | None = _fk_field("calculation.id")
     order: int = 0
     is_pseudo: bool = False

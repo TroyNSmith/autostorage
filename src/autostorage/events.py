@@ -1,9 +1,10 @@
 """SQLAlchemy ORM event listeners for validation and auto-managed identities."""
 
+import uuid
 from typing import Any
 
-from automol import Identity
-from automol.ident import Algorithm
+from automol import Geometry, Identity
+from automol.ident import HILL_FORMULA, RDKIT_INCHI, RDKIT_SMILES, AlgorithmRegistry
 from sqlalchemy import event
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper, Session
@@ -186,7 +187,7 @@ def _find_or_create_identity(session: Session, identity: Identity) -> IdentityRo
         session.query(IdentityRow)
         .filter_by(
             kind=identity.kind,
-            algorithm=str(identity.algorithm),
+            algorithm=identity.algorithm,
             value=identity.value,
         )
         .first()
@@ -198,7 +199,7 @@ def _find_or_create_identity(session: Session, identity: Identity) -> IdentityRo
             if (
                 isinstance(new_obj, IdentityRow)
                 and new_obj.kind == identity.kind
-                and new_obj.algorithm == str(identity.algorithm)
+                and new_obj.algorithm == identity.algorithm
                 and new_obj.value == identity.value
             ):
                 existing = new_obj
@@ -208,7 +209,7 @@ def _find_or_create_identity(session: Session, identity: Identity) -> IdentityRo
         # Create new identity row
         new_identity = IdentityRow(
             kind=identity.kind,
-            algorithm=str(identity.algorithm),
+            algorithm=identity.algorithm,
             value=identity.value,
         )
         session.add(new_identity)
@@ -217,13 +218,86 @@ def _find_or_create_identity(session: Session, identity: Identity) -> IdentityRo
     return existing
 
 
+def _sibling_geometries(
+    identity_row: IdentityRow, geometry_row: GeometryRow
+) -> dict[str, Geometry]:
+    """Return geometries sharing `identity_row`, keyed by id, sorted by ascending id.
+
+    Excludes `geometry_row` itself and any sibling not yet assigned an id.
+    """
+    pairs: list[tuple[uuid.UUID, Geometry]] = [
+        (sp.geometry.id, sp.geometry)
+        for sp in identity_row.stationary_points
+        if sp.geometry is not None
+        and sp.geometry is not geometry_row
+        and sp.geometry.id is not None
+    ]
+    return {str(geo_id): geo for geo_id, geo in sorted(pairs, key=lambda pair: pair[0])}
+
+
+def _get_sibling_identity(
+    session: Session, geometry_id: str, algorithm: str
+) -> IdentityRow:
+    """Get the identity for a sibling stationary point's geometry.
+
+    Parameters
+    ----------
+    session
+        Database session.
+    geometry_id
+        UUID string of the sibling geometry.
+    algorithm
+        Identity algorithm to retrieve.
+
+    Returns
+    -------
+    IdentityRow
+        The identity row for the sibling.
+
+    Raises
+    ------
+    ValueError
+        If no stationary point or identity is found.
+    """
+    sibling_geometry_id = uuid.UUID(geometry_id)
+    sibling_sp = (
+        session.query(StationaryPointRow)
+        .filter_by(geometry_id=sibling_geometry_id)
+        .first()
+    )
+    if sibling_sp is None:
+        msg = f"No stationary point found for geometry {geometry_id}"
+        raise ValueError(msg)
+
+    identity_row = next(
+        (id_row for id_row in sibling_sp.identities if id_row.algorithm == algorithm),
+        None,
+    )
+    if identity_row is None:
+        msg = f"Sibling stationary point {sibling_sp.id} missing {algorithm} identity"
+        raise ValueError(msg)
+
+    return identity_row
+
+
 @event.listens_for(Session, "before_flush")
-def add_inchi_identities_before_flush(
+def add_registry_identities_before_flush(
     session: Session,
     flush_context: Any,  # noqa: ARG001, ANN401
     instances: Any,  # noqa: ARG001, ANN401
 ) -> None:
-    """Automatically attach InChI identities to newly inserted stationary points."""
+    """Automatically attach registry identities to newly inserted stationary points.
+
+    Generates an identity for every registered algorithm except SMILES and Hill
+    formula, which are attached as `IdentityExtraRow`s instead. Non-InChI
+    algorithms are passed the InChI's sibling geometries as `other_geos`.
+    """
+    algorithms = [
+        alg
+        for alg in AlgorithmRegistry.all_algorithms()
+        if alg not in (RDKIT_SMILES, HILL_FORMULA)
+    ]
+
     for obj in session.new:
         if not isinstance(obj, StationaryPointRow):
             continue
@@ -236,15 +310,28 @@ def add_inchi_identities_before_flush(
         if geometry_row is None:
             continue
 
-        # Generate InChI identity from geometry
-        identity = Identity.from_geometry(geometry_row, algorithm=Algorithm.RDKIT_INCHI)
+        inchi_identity = Identity.from_geometry(geometry_row, algorithm=RDKIT_INCHI)
+        inchi_row = _find_or_create_identity(session, inchi_identity)
+        other_geos = _sibling_geometries(inchi_row, geometry_row)
 
-        # Find or create the identity row
-        identity_row = _find_or_create_identity(session, identity)
+        for algorithm in algorithms:
+            if algorithm == RDKIT_INCHI:
+                identity_row = inchi_row
+            else:
+                identity = Identity.from_geometry(
+                    geometry_row, algorithm=algorithm, other_geos=other_geos
+                )
+                if identity.value in other_geos:
+                    # Identity points to a sibling geometry - reuse that
+                    # stationary point's identity
+                    identity_row = _get_sibling_identity(
+                        session, identity.value, algorithm
+                    )
+                else:
+                    identity_row = _find_or_create_identity(session, identity)
 
-        # Link the identity to the stationary point
-        if identity_row not in obj.identities:
-            obj.identities.append(identity_row)
+            if identity_row not in obj.identities:
+                obj.identities.append(identity_row)
 
 
 def _find_or_create_identity_extra(
@@ -313,20 +400,16 @@ def add_smiles_extras_before_flush(
         # Generate SMILES from geometry
         try:
             smiles_identity = Identity.from_geometry(
-                geometry_row, algorithm=Algorithm.RDKIT_SMILES
+                geometry_row, algorithm=RDKIT_SMILES
             )
             smiles_value = smiles_identity.value
         except Exception:  # noqa: BLE001, S112
             # Skip if SMILES generation fails (e.g., invalid structure)
             continue
 
-        # Get the InChI identity (should exist from add_inchi_identities_before_flush)
+        # Get the InChI identity (attached by add_registry_identities_before_flush)
         inchi_identity = next(
-            (
-                ident
-                for ident in obj.identities
-                if ident.algorithm == str(Algorithm.RDKIT_INCHI)
-            ),
+            (ident for ident in obj.identities if ident.algorithm == RDKIT_INCHI),
             None,
         )
 
@@ -367,21 +450,15 @@ def add_hill_extras_before_flush(
 
         # Generate Hill formula from geometry
         try:
-            hill_identity = Identity.from_geometry(
-                geometry_row, algorithm=Algorithm.HILL_FORMULA
-            )
+            hill_identity = Identity.from_geometry(geometry_row, algorithm=HILL_FORMULA)
             hill_value = hill_identity.value
         except Exception:  # noqa: BLE001, S112
             # Skip if Hill formula generation fails (e.g., invalid structure)
             continue
 
-        # Get the InChI identity (should exist from add_inchi_identities_before_flush)
+        # Get the InChI identity (attached by add_registry_identities_before_flush)
         inchi_identity = next(
-            (
-                ident
-                for ident in obj.identities
-                if ident.algorithm == str(Algorithm.RDKIT_INCHI)
-            ),
+            (ident for ident in obj.identities if ident.algorithm == RDKIT_INCHI),
             None,
         )
 

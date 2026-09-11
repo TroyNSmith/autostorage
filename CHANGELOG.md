@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`GeometryRow.id`**: Changed from an auto-incrementing `int` to a `uuid.UUID` (`default_factory=uuid.uuid4`). All dependent `geometry_id` foreign keys (`CalculationGeometryLink`, `GeometryTrajectoryLink`, `EnergyRow`, `GradientRow`, `HessianRow`, `StationaryPointRow`) updated from `int | None` to `uuid.UUID | None` accordingly.
+- **`_find_or_create_identity`**: Compares and stores `identity.algorithm` directly instead of `str(identity.algorithm)`.
+- **Bump** `automol` to v0.0.24.
+
+### Fixed
+
+- **Identity auto-population event listener** (`add_registry_identities_before_flush`, renamed from `add_inchi_identities_before_flush`): Now generates an identity for every algorithm in `automol.ident.AlgorithmRegistry` (previously only InChI), excluding SMILES and Hill formula, which continue to be attached separately as `IdentityExtraRow`s. Non-InChI algorithms are passed the InChI identity's sibling geometries (`other_geos`); when an algorithm's value matches a sibling's geometry, that sibling's existing identity row is reused instead of creating a duplicate.
+
 ## [0.0.15] - 2026-09-02
 
 ### Fixed
