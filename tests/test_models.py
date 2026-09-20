@@ -18,6 +18,7 @@ from autostorage.models import (
     GeometryTrajectoryLink,
     GradientRow,
     HessianRow,
+    IdentityAlgorithmRow,
     IdentityExtraRow,
     IdentityRow,
     IdentityStationaryLink,
@@ -677,27 +678,31 @@ class TestIdentityRow:
     """Tests for IdentityRow model."""
 
     def test_create_identity(self, database: Database) -> None:
-        """IdentityRow can be created with kind, algorithm, and value."""
+        """IdentityRow can be created with an algorithm and value."""
         with database.session() as session:
+            algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
+            )
             identity = IdentityRow(
-                kind="stereoisomer",
-                algorithm="rdkit inchi",
+                algorithm_id=algorithm.id,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity)
             session.commit()
 
             assert identity.id is not None
-            assert identity.kind == "stereoisomer"
-            assert identity.algorithm == "rdkit inchi"
+            assert identity.algorithm.kind == "stereoisomer"
+            assert identity.algorithm.name == "rdkit inchi"
             assert identity.value == "InChI=1S/CH4/h1H4"
 
     def test_identity_unique_constraint(self, database: Database) -> None:
-        """IdentityRow enforces unique constraint on kind, algorithm, value."""
+        """IdentityRow enforces unique constraint on algorithm and value."""
         with database.session() as session:
+            algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
+            )
             identity1 = IdentityRow(
-                kind="stereoisomer",
-                algorithm="rdkit inchi",
+                algorithm_id=algorithm.id,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity1)
@@ -705,8 +710,7 @@ class TestIdentityRow:
 
             # Try to create duplicate identity
             identity2 = IdentityRow(
-                kind="stereoisomer",
-                algorithm="rdkit inchi",
+                algorithm_id=algorithm.id,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity2)
@@ -717,9 +721,10 @@ class TestIdentityRow:
     def test_identity_relationships(self, database: Database) -> None:
         """IdentityRow relationships are initially empty."""
         with database.session() as session:
-            identity = IdentityRow(
-                kind="stereoisomer", algorithm="rdkit inchi", value="InChI=1S/CH4/h1H4"
+            algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
             )
+            identity = IdentityRow(algorithm_id=algorithm.id, value="InChI=1S/CH4/h1H4")
             session.add(identity)
             session.commit()
 
@@ -731,11 +736,16 @@ class TestIdentityExtraRow:
     """Tests for IdentityExtraRow model."""
 
     def test_create_identity_extra(self, database: Database) -> None:
-        """IdentityExtraRow can be created with attribute and value."""
+        """IdentityExtraRow can be created with an algorithm and value."""
         with database.session() as session:
+            inchi_algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
+            )
+            smiles_algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit smiles").one()
+            )
             identity = IdentityRow(
-                kind="stereoisomer",
-                algorithm="rdkit inchi",
+                algorithm_id=inchi_algorithm.id,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity)
@@ -743,27 +753,35 @@ class TestIdentityExtraRow:
 
             extra = IdentityExtraRow(
                 identity_id=identity.id,
-                attribute="molecular_weight",
-                value="16.04",
+                algorithm_id=smiles_algorithm.id,
+                value="C",
             )
             session.add(extra)
             session.commit()
 
             assert extra.id is not None
-            assert extra.attribute == "molecular_weight"
-            assert extra.value == "16.04"
+            assert extra.algorithm.name == "rdkit smiles"
+            assert extra.value == "C"
 
     def test_identity_extra_relationship(self, database: Database) -> None:
         """IdentityExtraRow.identity relationship works correctly."""
         with database.session() as session:
+            inchi_algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
+            )
+            smiles_algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit smiles").one()
+            )
             identity = IdentityRow(
-                kind="stereoisomer", algorithm="rdkit inchi", value="InChI=1S/CH4/h1H4"
+                algorithm_id=inchi_algorithm.id, value="InChI=1S/CH4/h1H4"
             )
             session.add(identity)
             session.flush()
 
             extra = IdentityExtraRow(
-                identity_id=identity.id, attribute="molecular_weight", value="16.04"
+                identity_id=identity.id,
+                algorithm_id=smiles_algorithm.id,
+                value="C",
             )
             session.add(extra)
             session.commit()
@@ -925,9 +943,10 @@ class TestLinkModels:
             session.flush()
 
             stat_pt = StationaryPointRow(geometry_id=geom.id, calculation_id=calc.id)
-            identity = IdentityRow(
-                kind="stereoisomer", algorithm="rdkit smiles", value="C"
+            smiles_algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit smiles").one()
             )
+            identity = IdentityRow(algorithm_id=smiles_algorithm.id, value="C")
             session.add_all([stat_pt, identity])
             session.flush()
 
@@ -1035,9 +1054,10 @@ class TestModelIntegration:
             session.flush()
 
             stat_pt = StationaryPointRow(geometry_id=geom.id, calculation_id=calc.id)
-            identity = IdentityRow(
-                kind="stereoisomer", algorithm="rdkit smiles", value="C"
+            smiles_algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit smiles").one()
             )
+            identity = IdentityRow(algorithm_id=smiles_algorithm.id, value="C")
             session.add_all([stat_pt, identity])
             session.flush()
 

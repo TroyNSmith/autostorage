@@ -2,10 +2,10 @@
 
 import numpy as np
 
-from autostorage import Database
-from autostorage.models import (
+from autostorage import (
     CalculationGeometryLink,
     CalculationRow,
+    Database,
     EnergyRow,
     GeometryRow,
     GradientRow,

@@ -5,6 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`IdentityAlgorithmRow`**: New table storing chemical identifier algorithms from `automol.ident.AlgorithmRegistry`, with fields for `name`, `kind` (`IdentityKind`), `deterministic` flag, and optional `parent_algorithm_id` for algorithms that depend on a parent (e.g., conformer identities derived from InChI). Each algorithm row links to its `IdentityRow` and `IdentityExtraRow` instances.
+- **`create_identity_algorithms()`**: Populates all identity algorithms from `automol.ident.AlgorithmRegistry` into the database, building the parent→child hierarchy recursively.
+- **Top-level exports**: Added `IdentityAlgorithmRow`, `IdentityStationaryLink`, `StageStationaryLink`, and `StepValidationLink` to `autostorage.__all__`.
+
+### Changed
+
+- **`IdentityRow`**: Now references `IdentityAlgorithmRow` via `algorithm_id` foreign key instead of storing `kind`/`algorithm` as direct columns. The unique constraint changed from `(kind, algorithm, value)` to `(algorithm_id, value)`. Relationships to `IdentityAlgorithmRow` added via `algorithm` field.
+- **`IdentityExtraRow`**: Now references `IdentityAlgorithmRow` via `algorithm_id` foreign key; the `attribute` column was removed in favor of the algorithm relationship.
+- **Identity event listeners** (`events.py`): Complete refactor to work with `IdentityAlgorithmRow`-based approach:
+  - `_find_or_create_identity()` replaced with `_get_or_create_identity()` that uses `(algorithm_id, value)` keys and maintains a per-flush cache (`_IdentityCache`, `_IdentityExtraCache`) to avoid duplicate lookups.
+  - New `_IdentityFlushContext` dataclass manages per-flush state (session, caches).
+  - `_resolve_parent_identity()` resolves parent identities and sibling geometries for non-deterministic algorithms.
+  - `_attach_algorithm_identity()` creates and attaches identities based on whether the algorithm is deterministic or requires a parent.
+  - Sibling geometry resolution now queries via `IdentityStationaryLink` joins instead of walking in-memory relationships.
+
 ## [0.0.16] - 2026-09-11
 
 ### Changed

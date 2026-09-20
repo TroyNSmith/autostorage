@@ -758,7 +758,7 @@ class IdentityAlgorithmRow(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str
     kind: IdentityKind
-
+    deterministic: bool = False
     parent_algorithm_id: int | None = Field(
         default=None,
         foreign_key="identity_algorithm.id",

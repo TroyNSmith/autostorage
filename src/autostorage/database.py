@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlmodel import SQLModel
 
 # Ensure all modules are loaded with the database
-from . import events  # noqa: F401
+from . import events
 from .models import *  # noqa: F403
 
 __all__ = ["Database"]
@@ -60,8 +60,7 @@ class Database:
             cursor.close()
 
         SQLModel.metadata.create_all(self.engine)
-        events.create_parent_identity_algorithms(Session(self.engine))
-        events.create_child_identity_algorithms(Session(self.engine))
+        events.create_identity_algorithms(Session(self.engine))
 
     def session(self) -> Session:
         """Return a fresh `Session` bound to this database's engine.
