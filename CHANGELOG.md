@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-09-19
+
 ### Added
 
 - **`IdentityAlgorithmRow`**: New table storing chemical identifier algorithms from `automol.ident.AlgorithmRegistry`, with fields for `name`, `kind` (`IdentityKind`), `deterministic` flag, and optional `parent_algorithm_id` for algorithms that depend on a parent (e.g., conformer identities derived from InChI). Each algorithm row links to its `IdentityRow` and `IdentityExtraRow` instances.
