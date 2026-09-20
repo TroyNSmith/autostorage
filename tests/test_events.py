@@ -1072,10 +1072,16 @@ class TestAddInchiIdentity:
             session.flush()
 
             geom = GeometryRow(
-                symbols=["C", "O"],
-                coordinates=[[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]],
+                symbols=["C", "H", "H", "H", "H"],
+                coordinates=[
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-1.0, 0.0, 0.0],
+                ],
                 charge=0,
-                spin=1,
+                spin=0,
             )
             session.add(geom)
             session.flush()
@@ -1088,8 +1094,8 @@ class TestAddInchiIdentity:
 
             assert len(stat_point.identities) == 1
             identity = stat_point.identities[0]
-            assert identity.kind == "stereoisomer"
-            assert identity.algorithm == "rdkit inchi"
+            assert identity.algorithm.kind == "stereoisomer"
+            assert identity.algorithm.name == "rdkit inchi"
             assert identity.value.startswith("InChI=")
 
     def test_existing_inchi_identity_reused(
@@ -1186,10 +1192,16 @@ class TestAddInchiIdentity:
             session.flush()
 
             geom1 = GeometryRow(
-                symbols=["C", "O"],
-                coordinates=[[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]],
+                symbols=["C", "H", "H", "H", "H"],
+                coordinates=[
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-1.0, 0.0, 0.0],
+                ],
                 charge=0,
-                spin=1,
+                spin=0,
             )
             geom2 = GeometryRow(
                 symbols=["C", "C"],
@@ -1233,10 +1245,16 @@ class TestAddInchiIdentity:
                 output_provenance={},
             )
             geom = GeometryRow(
-                symbols=["C", "O"],
-                coordinates=[[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]],
+                symbols=["C", "H", "H", "H", "H"],
+                coordinates=[
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-1.0, 0.0, 0.0],
+                ],
                 charge=0,
-                spin=1,
+                spin=0,
             )
 
             # Create StationaryPointRow with relationship objects (no IDs)
@@ -1250,8 +1268,8 @@ class TestAddInchiIdentity:
             # Identity should be auto-populated despite using relationship objects
             assert len(stat_point.identities) == 1
             identity = stat_point.identities[0]
-            assert identity.kind == "stereoisomer"
-            assert identity.algorithm == "rdkit inchi"
+            assert identity.algorithm.kind == "stereoisomer"
+            assert identity.algorithm.name == "rdkit inchi"
             assert identity.value.startswith("InChI=")
 
 
@@ -1300,7 +1318,7 @@ class TestAddSmilesExtras:
             # Should have one InChI identity with one SMILES extra
             assert len(stat_point.identities) == 1
             identity = stat_point.identities[0]
-            assert identity.algorithm == "rdkit inchi"
+            assert identity.algorithm.name == "rdkit inchi"
 
             # Reload to get the identity_extras relationship populated
             session.expire_all()
@@ -1310,10 +1328,10 @@ class TestAddSmilesExtras:
 
             # Check for SMILES extra
             extras_by_attr = {
-                extra.attribute: extra.value for extra in identity.identity_extras
+                extra.algorithm.name: extra.value for extra in identity.identity_extras
             }
-            assert "rdkit_smiles" in extras_by_attr
-            assert extras_by_attr["rdkit_smiles"] == "C"  # Methane SMILES
+            assert "rdkit smiles" in extras_by_attr
+            assert extras_by_attr["rdkit smiles"] == "C"  # Methane SMILES
 
     def test_duplicate_smiles_not_created(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1387,10 +1405,10 @@ class TestAddSmilesExtras:
 
             # Check for SMILES extra
             extras_by_attr = {
-                extra.attribute: extra.value for extra in identity.identity_extras
+                extra.algorithm.name: extra.value for extra in identity.identity_extras
             }
-            assert "rdkit_smiles" in extras_by_attr
-            assert extras_by_attr["rdkit_smiles"] == "C"
+            assert "rdkit smiles" in extras_by_attr
+            assert extras_by_attr["rdkit smiles"] == "C"
 
     def test_different_smiles_for_different_geometries(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1460,18 +1478,18 @@ class TestAddSmilesExtras:
 
             assert len(identity1.identity_extras) == EXPECTED_EXTRAS_COUNT
             extras1_by_attr = {
-                extra.attribute: extra.value for extra in identity1.identity_extras
+                extra.algorithm.name: extra.value for extra in identity1.identity_extras
             }
-            assert "rdkit_smiles" in extras1_by_attr
-            assert extras1_by_attr["rdkit_smiles"] == "C"
+            assert "rdkit smiles" in extras1_by_attr
+            assert extras1_by_attr["rdkit smiles"] == "C"
 
             assert len(identity2.identity_extras) == EXPECTED_EXTRAS_COUNT
             extras2_by_attr = {
-                extra.attribute: extra.value for extra in identity2.identity_extras
+                extra.algorithm.name: extra.value for extra in identity2.identity_extras
             }
-            assert "rdkit_smiles" in extras2_by_attr
+            assert "rdkit smiles" in extras2_by_attr
             # Ethane SMILES should be different from methane
-            assert extras2_by_attr["rdkit_smiles"] != "C"
+            assert extras2_by_attr["rdkit smiles"] != "C"
 
 
 class TestAddHillExtras:
@@ -1519,7 +1537,7 @@ class TestAddHillExtras:
             # Should have one InChI identity with two extras (SMILES + Hill formula)
             assert len(stat_point.identities) == 1
             identity = stat_point.identities[0]
-            assert identity.algorithm == "rdkit inchi"
+            assert identity.algorithm.name == "rdkit inchi"
 
             # Reload to get the identity_extras relationship populated
             session.expire_all()
@@ -1529,12 +1547,12 @@ class TestAddHillExtras:
 
             # Check for both SMILES and Hill formula extras
             extras_by_attr = {
-                extra.attribute: extra.value for extra in identity.identity_extras
+                extra.algorithm.name: extra.value for extra in identity.identity_extras
             }
-            assert "rdkit_smiles" in extras_by_attr
-            assert extras_by_attr["rdkit_smiles"] == "C"  # Methane SMILES
-            assert "hill_formula" in extras_by_attr
-            assert extras_by_attr["hill_formula"] == "CH4"  # Methane Hill formula
+            assert "rdkit smiles" in extras_by_attr
+            assert extras_by_attr["rdkit smiles"] == "C"  # Methane SMILES
+            assert "hill formula" in extras_by_attr
+            assert extras_by_attr["hill formula"] == "CH4"  # Methane Hill formula
 
     def test_duplicate_hill_not_created(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1608,12 +1626,12 @@ class TestAddHillExtras:
 
             # Check for both SMILES and Hill formula extras
             extras_by_attr = {
-                extra.attribute: extra.value for extra in identity.identity_extras
+                extra.algorithm.name: extra.value for extra in identity.identity_extras
             }
-            assert "rdkit_smiles" in extras_by_attr
-            assert extras_by_attr["rdkit_smiles"] == "C"
-            assert "hill_formula" in extras_by_attr
-            assert extras_by_attr["hill_formula"] == "CH4"
+            assert "rdkit smiles" in extras_by_attr
+            assert extras_by_attr["rdkit smiles"] == "C"
+            assert "hill formula" in extras_by_attr
+            assert extras_by_attr["hill formula"] == "CH4"
 
     def test_different_hill_for_different_geometries(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1683,23 +1701,23 @@ class TestAddHillExtras:
 
             assert len(identity1.identity_extras) == EXPECTED_EXTRAS_COUNT
             extras1_by_attr = {
-                extra.attribute: extra.value for extra in identity1.identity_extras
+                extra.algorithm.name: extra.value for extra in identity1.identity_extras
             }
-            assert "rdkit_smiles" in extras1_by_attr
-            assert extras1_by_attr["rdkit_smiles"] == "C"
-            assert "hill_formula" in extras1_by_attr
-            assert extras1_by_attr["hill_formula"] == "CH4"
+            assert "rdkit smiles" in extras1_by_attr
+            assert extras1_by_attr["rdkit smiles"] == "C"
+            assert "hill formula" in extras1_by_attr
+            assert extras1_by_attr["hill formula"] == "CH4"
 
             assert len(identity2.identity_extras) == EXPECTED_EXTRAS_COUNT
             extras2_by_attr = {
-                extra.attribute: extra.value for extra in identity2.identity_extras
+                extra.algorithm.name: extra.value for extra in identity2.identity_extras
             }
-            assert "rdkit_smiles" in extras2_by_attr
+            assert "rdkit smiles" in extras2_by_attr
             # Ethane SMILES should be different from methane
-            assert extras2_by_attr["rdkit_smiles"] != "C"
-            assert "hill_formula" in extras2_by_attr
+            assert extras2_by_attr["rdkit smiles"] != "C"
+            assert "hill formula" in extras2_by_attr
             # Ethane Hill formula should be different from methane
-            assert extras2_by_attr["hill_formula"] != "CH4"
+            assert extras2_by_attr["hill formula"] != "CH4"
 
 
 class TestVerifyValidStationaryHasHessian:

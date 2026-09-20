@@ -8,11 +8,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlmodel import col
 
 from autostorage.database import Database
 from autostorage.models import (
     CalculationGeometryLink,
     CalculationRow,
+    IdentityAlgorithmRow,
     IdentityRow,
     ModelRow,
 )
@@ -149,17 +151,26 @@ class TestDatabaseIntegration:
     def test_insert_and_query_row(self, database: Database) -> None:
         """Can insert and query a row from the database."""
         with database.session() as session:
+            # Algorithms are seeded on Database init from the automol registry
+            algorithm = (
+                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
+            )
+
             # Create an identity row
             identity = IdentityRow(
-                algorithm="RDKIT_INCHI",
-                kind="inchi",
+                algorithm_id=algorithm.id,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity)
             session.commit()
 
             # Query it back
-            result = session.query(IdentityRow).filter_by(kind="inchi").first()
+            result = (
+                session.query(IdentityRow)
+                .join(IdentityAlgorithmRow)
+                .filter(col(IdentityAlgorithmRow.kind) == "stereoisomer")
+                .first()
+            )
             assert result is not None
             assert result.value == "InChI=1S/CH4/h1H4"
 

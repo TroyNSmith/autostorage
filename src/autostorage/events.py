@@ -1,24 +1,60 @@
 """SQLAlchemy ORM event listeners for validation and auto-managed identities."""
 
-import uuid
+from dataclasses import dataclass
 from typing import Any
 
-from automol import Geometry, Identity
-from automol.ident import HILL_FORMULA, RDKIT_INCHI, RDKIT_SMILES, AlgorithmRegistry
+from automol import Algorithm
+from automol.ident import AlgorithmRegistry
 from sqlalchemy import event
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper, Session
+from sqlmodel import col, select
 
 from .models import (
     GeometryRow,
     GeometryTrajectoryLink,
     GradientRow,
     HessianRow,
+    IdentityAlgorithmRow,
     IdentityExtraRow,
     IdentityRow,
+    IdentityStationaryLink,
     StationaryPointRow,
     StepRow,
 )
+
+
+def create_identity_algorithms(session: Session) -> None:
+    """Create all identity algorithms in the database if they do not already exist."""
+    logged: dict[str, IdentityAlgorithmRow] = {}
+
+    def _add_algorithm(alg: Algorithm) -> IdentityAlgorithmRow:
+        """Add an algorithm to the database if it does not already exist."""
+        if alg.name in logged:
+            return logged[alg.name]
+
+        parent_id = None
+        if alg.parent_algorithm is not None:
+            parent = _add_algorithm(alg.parent_algorithm)
+            parent_id = parent.id
+
+        existing = session.query(IdentityAlgorithmRow).filter_by(name=alg.name).first()
+        if existing is None:
+            existing = IdentityAlgorithmRow(
+                name=alg.name,
+                kind=alg.kind,
+                parent_algorithm_id=parent_id,
+                deterministic=alg.deterministic,
+            )
+            session.add(existing)
+            session.commit()
+
+        logged[alg.name] = existing
+
+        return existing
+
+    for alg in AlgorithmRegistry.algorithms:
+        _add_algorithm(alg)
 
 
 @event.listens_for(StepRow, "before_insert")
@@ -177,107 +213,150 @@ def verify_trajectory_geometry_ndim_insert(
         raise ValueError(msg)
 
 
-def _find_or_create_identity(session: Session, identity: Identity) -> IdentityRow:
-    """Find or create an IdentityRow for the given Identity.
-
-    Checks both the database and pending session inserts.
-    """
-    # First check the database
-    existing = (
-        session.query(IdentityRow)
-        .filter_by(
-            kind=identity.kind,
-            algorithm=identity.algorithm,
-            value=identity.value,
-        )
-        .first()
-    )
-
-    # If not in database, check session.new for pending inserts
-    if existing is None:
-        for new_obj in session.new:
-            if (
-                isinstance(new_obj, IdentityRow)
-                and new_obj.kind == identity.kind
-                and new_obj.algorithm == identity.algorithm
-                and new_obj.value == identity.value
-            ):
-                existing = new_obj
-                break
-
-    if existing is None:
-        # Create new identity row
-        new_identity = IdentityRow(
-            kind=identity.kind,
-            algorithm=identity.algorithm,
-            value=identity.value,
-        )
-        session.add(new_identity)
-        return new_identity
-
-    return existing
+_IdentityCache = dict[tuple[int, str], IdentityRow]
+_IdentityExtraCache = dict[tuple[int, str], IdentityExtraRow]
 
 
-def _sibling_geometries(
-    identity_row: IdentityRow, geometry_row: GeometryRow
-) -> dict[str, Geometry]:
-    """Return geometries sharing `identity_row`, keyed by id, sorted by ascending id.
+@dataclass
+class _IdentityFlushContext:
+    """Per-flush state shared by the identity-resolution helpers below."""
 
-    Excludes `geometry_row` itself and any sibling not yet assigned an id.
-    """
-    pairs: list[tuple[uuid.UUID, Geometry]] = [
-        (sp.geometry.id, sp.geometry)
-        for sp in identity_row.stationary_points
-        if sp.geometry is not None
-        and sp.geometry is not geometry_row
-        and sp.geometry.id is not None
-    ]
-    return {str(geo_id): geo for geo_id, geo in sorted(pairs, key=lambda pair: pair[0])}
+    session: Session
+    cache: _IdentityCache
+    extra_cache: _IdentityExtraCache
 
 
-def _get_sibling_identity(
-    session: Session, geometry_id: str, algorithm: str
+def _require_algorithm_id(algorithm_row: IdentityAlgorithmRow) -> int:
+    """Return the primary key of an already-persisted algorithm row."""
+    if algorithm_row.id is None:
+        msg = f"IdentityAlgorithmRow {algorithm_row.name!r} is missing its primary key"
+        raise ValueError(msg)
+    return algorithm_row.id
+
+
+def _get_or_create_identity(
+    ctx: _IdentityFlushContext, algorithm_id: int, value: str
 ) -> IdentityRow:
-    """Get the identity for a sibling stationary point's geometry.
+    """Look up a pending or persisted identity, creating one if none exists."""
+    key = (algorithm_id, value)
+    ident = ctx.cache.get(key)
+    if ident is None:
+        ident = (
+            ctx.session.query(IdentityRow)
+            .filter(
+                col(IdentityRow.algorithm_id) == algorithm_id,
+                col(IdentityRow.value) == value,
+            )
+            .one_or_none()
+        )
+    if ident is None:
+        ident = IdentityRow(algorithm_id=algorithm_id, value=value)
+        ctx.session.add(ident)
+    ctx.cache[key] = ident
+    return ident
 
-    Parameters
-    ----------
-    session
-        Database session.
-    geometry_id
-        UUID string of the sibling geometry.
-    algorithm
-        Identity algorithm to retrieve.
 
-    Returns
-    -------
-    IdentityRow
-        The identity row for the sibling.
+def _resolve_parent_identity(
+    ctx: _IdentityFlushContext,
+    obj: StationaryPointRow,
+    algorithm: Algorithm,
+    geo_row: GeometryRow,
+) -> tuple[IdentityRow | None, dict[str, Any] | None]:
+    """Resolve the parent identity and sibling geometries for `algorithm`."""
+    if algorithm.parent_algorithm is None:
+        return None, None
 
-    Raises
-    ------
-    ValueError
-        If no stationary point or identity is found.
-    """
-    sibling_geometry_id = uuid.UUID(geometry_id)
-    sibling_sp = (
-        session.query(StationaryPointRow)
-        .filter_by(geometry_id=sibling_geometry_id)
-        .first()
+    parent_alg = (
+        ctx.session.query(IdentityAlgorithmRow)
+        .filter(col(IdentityAlgorithmRow.name) == algorithm.parent_algorithm.name)
+        .one()
     )
-    if sibling_sp is None:
-        msg = f"No stationary point found for geometry {geometry_id}"
+    parent_alg_id = _require_algorithm_id(parent_alg)
+    parent_val = algorithm.parent_algorithm.identity_fn(geo_row)
+    is_new_parent = (parent_alg_id, parent_val) not in ctx.cache
+    parent_ident = _get_or_create_identity(ctx, parent_alg_id, parent_val)
+
+    if is_new_parent:
+        if parent_ident not in obj.identities:
+            obj.identities.append(parent_ident)
+        return parent_ident, None
+
+    stmt = (
+        select(StationaryPointRow)
+        .join(
+            IdentityStationaryLink,
+            onclause=col(IdentityStationaryLink.stationary_id)
+            == col(StationaryPointRow.id),
+        )
+        .join(
+            IdentityRow,
+            onclause=col(IdentityRow.id) == col(IdentityStationaryLink.identity_id),
+        )
+        .where(
+            col(IdentityRow.algorithm_id) == parent_alg_id,
+            col(IdentityRow.value) == parent_val,
+        )
+    )
+    other_stps = ctx.session.scalars(stmt).all()
+    other_geos = None
+    if other_stps:
+        other_geos = {
+            ident.value: stp.geometry
+            for stp in other_stps
+            for ident in stp.identities
+            if ident.algorithm.name == algorithm.name  # Filter by new algorithm name
+            and stp.id != obj.id
+        }
+    return parent_ident, other_geos
+
+
+def _attach_algorithm_identity(
+    ctx: _IdentityFlushContext,
+    obj: StationaryPointRow,
+    algorithm: Algorithm,
+    algorithm_val: str,
+    parent_ident: IdentityRow | None,
+) -> None:
+    """Create (if needed) and attach the identity for `algorithm` to `obj`."""
+    alg = (
+        ctx.session.query(IdentityAlgorithmRow)
+        .filter(col(IdentityAlgorithmRow.name) == algorithm.name)
+        .one()
+    )
+    alg_id = _require_algorithm_id(alg)
+
+    if algorithm.deterministic:
+        algorithm_ident = _get_or_create_identity(ctx, alg_id, algorithm_val)
+        if algorithm_ident not in obj.identities:
+            obj.identities.append(algorithm_ident)
+        return
+
+    if parent_ident is None:
+        msg = "Non-deterministic identifiers are required to have a parent identity."
         raise ValueError(msg)
 
-    identity_row = next(
-        (id_row for id_row in sibling_sp.identities if id_row.algorithm == algorithm),
-        None,
-    )
-    if identity_row is None:
-        msg = f"Sibling stationary point {sibling_sp.id} missing {algorithm} identity"
-        raise ValueError(msg)
+    extra_key = (alg_id, algorithm_val)
+    algorithm_ident = ctx.extra_cache.get(extra_key)
+    if algorithm_ident is None:
+        algorithm_ident = (
+            ctx.session.query(IdentityExtraRow)
+            .filter(
+                col(IdentityExtraRow.algorithm_id) == alg_id,
+                col(IdentityExtraRow.value) == algorithm_val,
+            )
+            .one_or_none()
+        )
+    if algorithm_ident is None:
+        # The identity=parent_ident relationship lets SQLAlchemy
+        # resolve the foreign key once `parent_ident` is flushed.
+        algorithm_ident = IdentityExtraRow(
+            identity=parent_ident,
+            algorithm_id=alg_id,
+            value=algorithm_val,
+        )
+        ctx.session.add(algorithm_ident)
 
-    return identity_row
+    ctx.extra_cache[extra_key] = algorithm_ident
 
 
 @event.listens_for(Session, "before_flush")
@@ -292,11 +371,14 @@ def add_registry_identities_before_flush(
     formula, which are attached as `IdentityExtraRow`s instead. Non-InChI
     algorithms are passed the InChI's sibling geometries as `other_geos`.
     """
-    algorithms = [
-        alg
-        for alg in AlgorithmRegistry.all_algorithms()
-        if alg not in (RDKIT_SMILES, HILL_FORMULA)
-    ]
+    # Autoflush is suppressed while `before_flush` handlers run, so identities
+    # created earlier in this same flush batch are not yet visible to the
+    # `session.query(...)` lookups below. Cache them here (keyed by
+    # algorithm id and value) so repeated lookups for the same identity
+    # within this batch reuse the pending row instead of creating a
+    # duplicate that collides with the `(algorithm_id, value)` unique
+    # constraint once the flush actually executes.
+    ctx = _IdentityFlushContext(session=session, cache={}, extra_cache={})
 
     for obj in session.new:
         if not isinstance(obj, StationaryPointRow):
@@ -304,171 +386,17 @@ def add_registry_identities_before_flush(
 
         # Get geometry - try relationship first (for `geometry=geo_row`),
         # then load via FK (for `geometry_id=id`)
-        geometry_row = obj.geometry
-        if geometry_row is None and obj.geometry_id is not None:
-            geometry_row = session.get(GeometryRow, obj.geometry_id)
-        if geometry_row is None:
+        geo_row = obj.geometry
+        if geo_row is None and obj.geometry_id is not None:
+            geo_row = session.get(GeometryRow, obj.geometry_id)
+
+        if geo_row is None:
+            # Without a geometry there is nothing to compute identities from.
             continue
 
-        inchi_identity = Identity.from_geometry(geometry_row, algorithm=RDKIT_INCHI)
-        inchi_row = _find_or_create_identity(session, inchi_identity)
-        other_geos = _sibling_geometries(inchi_row, geometry_row)
-
-        for algorithm in algorithms:
-            if algorithm == RDKIT_INCHI:
-                identity_row = inchi_row
-            else:
-                identity = Identity.from_geometry(
-                    geometry_row, algorithm=algorithm, other_geos=other_geos
-                )
-                if identity.value in other_geos:
-                    # Identity points to a sibling geometry - reuse that
-                    # stationary point's identity
-                    identity_row = _get_sibling_identity(
-                        session, identity.value, algorithm
-                    )
-                else:
-                    identity_row = _find_or_create_identity(session, identity)
-
-            if identity_row not in obj.identities:
-                obj.identities.append(identity_row)
-
-
-def _find_or_create_identity_extra(
-    session: Session, identity: IdentityRow, attribute: str, value: str
-) -> IdentityExtraRow | None:
-    """Find or create an IdentityExtraRow.
-
-    Checks both the database and pending session inserts. Returns None if the
-    extra already exists.
-    """
-    # Check if the identity has an ID (already in database)
-    if identity.id is not None:
-        existing = (
-            session.query(IdentityExtraRow)
-            .filter_by(
-                identity_id=identity.id,
-                attribute=attribute,
-                value=value,
+        for algorithm in AlgorithmRegistry.algorithms:
+            parent_ident, other_geos = _resolve_parent_identity(
+                ctx, obj, algorithm, geo_row
             )
-            .first()
-        )
-        if existing is not None:
-            return None  # Already exists in database
-
-    # Check session.new for pending inserts (both for this identity and in general)
-    for new_obj in session.new:
-        if (
-            isinstance(new_obj, IdentityExtraRow)
-            and (new_obj.identity is identity or new_obj.identity_id == identity.id)
-            and new_obj.attribute == attribute
-            and new_obj.value == value
-        ):
-            return None  # Already pending insertion
-
-    # Create new extra, using the identity relationship
-    return IdentityExtraRow(
-        identity=identity,
-        attribute=attribute,
-        value=value,
-    )
-
-
-@event.listens_for(Session, "before_flush")
-def add_smiles_extras_before_flush(
-    session: Session,
-    flush_context: Any,  # noqa: ARG001, ANN401
-    instances: Any,  # noqa: ARG001, ANN401
-) -> None:
-    """Automatically attach SMILES as IdentityExtraRow to stationary points."""
-    for obj in session.new:
-        if not isinstance(obj, StationaryPointRow):
-            continue
-
-        # Skip if no identities attached yet
-        if not obj.identities:
-            continue
-
-        # Get geometry - try relationship first (for `geometry=geo_row`),
-        # then load via FK (for `geometry_id=id`)
-        geometry_row = obj.geometry
-        if geometry_row is None and obj.geometry_id is not None:
-            geometry_row = session.get(GeometryRow, obj.geometry_id)
-        if geometry_row is None:
-            continue
-
-        # Generate SMILES from geometry
-        try:
-            smiles_identity = Identity.from_geometry(
-                geometry_row, algorithm=RDKIT_SMILES
-            )
-            smiles_value = smiles_identity.value
-        except Exception:  # noqa: BLE001, S112
-            # Skip if SMILES generation fails (e.g., invalid structure)
-            continue
-
-        # Get the InChI identity (attached by add_registry_identities_before_flush)
-        inchi_identity = next(
-            (ident for ident in obj.identities if ident.algorithm == RDKIT_INCHI),
-            None,
-        )
-
-        if inchi_identity is None:
-            continue
-
-        # Find or create the SMILES extra
-        smiles_extra = _find_or_create_identity_extra(
-            session, inchi_identity, "rdkit_smiles", smiles_value
-        )
-
-        if smiles_extra is not None:
-            session.add(smiles_extra)
-
-
-@event.listens_for(Session, "before_flush")
-def add_hill_extras_before_flush(
-    session: Session,
-    flush_context: Any,  # noqa: ARG001, ANN401
-    instances: Any,  # noqa: ARG001, ANN401
-) -> None:
-    """Automatically attach Hill formula as IdentityExtraRow to stationary points."""
-    for obj in session.new:
-        if not isinstance(obj, StationaryPointRow):
-            continue
-
-        # Skip if no identities attached yet
-        if not obj.identities:
-            continue
-
-        # Get geometry - try relationship first (for `geometry=geo_row`),
-        # then load via FK (for `geometry_id=id`)
-        geometry_row = obj.geometry
-        if geometry_row is None and obj.geometry_id is not None:
-            geometry_row = session.get(GeometryRow, obj.geometry_id)
-        if geometry_row is None:
-            continue
-
-        # Generate Hill formula from geometry
-        try:
-            hill_identity = Identity.from_geometry(geometry_row, algorithm=HILL_FORMULA)
-            hill_value = hill_identity.value
-        except Exception:  # noqa: BLE001, S112
-            # Skip if Hill formula generation fails (e.g., invalid structure)
-            continue
-
-        # Get the InChI identity (attached by add_registry_identities_before_flush)
-        inchi_identity = next(
-            (ident for ident in obj.identities if ident.algorithm == RDKIT_INCHI),
-            None,
-        )
-
-        if inchi_identity is None:
-            continue
-
-        # Find or create the Hill formula extra
-        hill_extra = _find_or_create_identity_extra(
-            session, inchi_identity, "hill_formula", hill_value
-        )
-
-        if hill_extra is not None:
-            session.add(hill_extra)
+            algorithm_val = algorithm.identity_fn(geo_row, other_geos)
+            _attach_algorithm_identity(ctx, obj, algorithm, algorithm_val, parent_ident)

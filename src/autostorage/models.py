@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 import numpy as np
-from automol import Geometry, Identity
+from automol import Geometry, IdentityKind
 from automol.utils.types import FloatArray
 from pydantic import field_validator
 from sqlmodel import (
@@ -749,7 +749,33 @@ class StepRow(SQLModel, table=True):
 
 
 # 4. Identity rows
-class IdentityRow(SQLModel, Identity, table=True):
+class IdentityAlgorithmRow(SQLModel, table=True):
+    """A chemical identifier algorithm."""
+
+    __tablename__ = "identity_algorithm"
+    model_config = SQLModelConfig(arbitrary_types_allowed=True)
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    kind: IdentityKind
+    deterministic: bool = False
+    parent_algorithm_id: int | None = Field(
+        default=None,
+        foreign_key="identity_algorithm.id",
+        ondelete="CASCADE",
+        nullable=True,
+    )
+
+    parent_algorithm: "IdentityAlgorithmRow" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[IdentityAlgorithmRow.parent_algorithm_id]"
+        }
+    )
+    identities: list["IdentityRow"] = Relationship(back_populates="algorithm")
+    identity_extras: list["IdentityExtraRow"] = Relationship(back_populates="algorithm")
+
+
+class IdentityRow(SQLModel, table=True):
     """A chemical identifier associated with one or more stationary points.
 
     Attributes
@@ -770,18 +796,27 @@ class IdentityRow(SQLModel, Identity, table=True):
 
     __tablename__ = "identity"
     __table_args__ = (
-        UniqueConstraint("kind", "algorithm", "value", name="unique_identity"),
+        UniqueConstraint("algorithm_id", "value", name="unique_identity"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    algorithm_id: int | None = Field(
+        default=None,
+        foreign_key="identity_algorithm.id",
+        ondelete="CASCADE",
+        nullable=False,
+        index=True,
+    )
+    algorithm_cache: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(CompressedJSONTypeDecorator())
+    )
+    value: str
 
+    algorithm: "IdentityAlgorithmRow" = Relationship(back_populates="identities")
     stationary_points: list["StationaryPointRow"] = Relationship(
         back_populates="identities", link_model=IdentityStationaryLink
     )
     identity_extras: list["IdentityExtraRow"] = Relationship(back_populates="identity")
-    algorithm_cache: dict[str, Any] = Field(
-        default_factory=dict, sa_column=Column(CompressedJSONTypeDecorator())
-    )
 
 
 class IdentityExtraRow(SQLModel, table=True):
@@ -811,8 +846,14 @@ class IdentityExtraRow(SQLModel, table=True):
         nullable=False,
         index=True,
     )
-
-    attribute: str
+    algorithm_id: int | None = Field(
+        default=None,
+        foreign_key="identity_algorithm.id",
+        ondelete="CASCADE",
+        nullable=False,
+        index=True,
+    )
     value: str
 
     identity: "IdentityRow" = Relationship(back_populates="identity_extras")
+    algorithm: "IdentityAlgorithmRow" = Relationship(back_populates="identity_extras")
