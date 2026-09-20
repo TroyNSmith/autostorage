@@ -60,6 +60,8 @@ class Database:
             cursor.close()
 
         SQLModel.metadata.create_all(self.engine)
+        events.create_parent_identity_algorithms(Session(self.engine))
+        events.create_child_identity_algorithms(Session(self.engine))
 
     def session(self) -> Session:
         """Return a fresh `Session` bound to this database's engine.
