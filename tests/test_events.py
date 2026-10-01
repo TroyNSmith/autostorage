@@ -8,16 +8,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
 
+from autostorage import IdentityGenerationWarning
 from autostorage.database import Database
 from autostorage.models import (
     CalculationRow,
     GeometryRow,
     GeometryTrajectoryLink,
-    GradientRow,
-    HessianRow,
     IdentityRow,
     ModelRow,
+    PropertyKindRow,
+    PropertyValueRow,
     StageRow,
     StationaryPointRow,
     StepRow,
@@ -27,8 +29,8 @@ from autostorage.models import (
 # Test data constants
 NDIM_2 = 2
 NDIM_3 = 3
-EXPECTED_IDENTITY_COUNT_TWO = 2
-EXPECTED_EXTRAS_COUNT = 2
+EXPECTED_IDENTITY_COUNT_THREE = 3
+EXPECTED_IDENTITY_COUNT_SIX = 6
 NATOMS_THREE = 3
 NATOMS_TWO = 2
 
@@ -88,36 +90,6 @@ def make_calculation() -> Callable[[int], CalculationRow]:
             model_id=model_id,
             input_provenance={},
             output_provenance={},
-        )
-
-    return _make
-
-
-@pytest.fixture
-def make_geometry_2atom() -> Callable[[], GeometryRow]:
-    """Create factory for 2-atom geometry (C, H)."""
-
-    def _make() -> GeometryRow:
-        return GeometryRow(
-            symbols=["C", "H"],
-            coordinates=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
-            charge=0,
-            spin=0,
-        )
-
-    return _make
-
-
-@pytest.fixture
-def make_geometry_3atom() -> Callable[[], GeometryRow]:
-    """Create factory for 3-atom geometry (C, H, H)."""
-
-    def _make() -> GeometryRow:
-        return GeometryRow(
-            symbols=["C", "H", "H"],
-            coordinates=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            charge=0,
-            spin=0,
         )
 
     return _make
@@ -402,486 +374,8 @@ class TestVerifyStepBarrierlessConsistency:
                 session.flush()
 
 
-class TestVerifyGradientShape:
-    """Tests for verify_gradient_shape event listener."""
-
-    def test_valid_gradient_shape_on_insert(
-        self,
-        database: Database,
-        make_model_gradient: Callable[[], ModelRow],
-        make_geometry_3atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Gradient with correct shape (3 * natoms,) is accepted on insert."""
-        with database.session() as session:
-            model = make_model_gradient()
-            session.add(model)
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="gradient",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            geom = make_geometry_3atom()
-            session.add(geom)
-            session.flush()
-
-            # Create gradient with correct shape (3 * 3 = 9 elements)
-            gradient = GradientRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]),
-            )
-            gradient.geometry = geom
-            session.add(gradient)
-            session.flush()
-
-            assert gradient.value.shape == (9,)
-            assert len(gradient.geometry.symbols) == NATOMS_THREE
-
-    def test_invalid_gradient_shape_on_insert(
-        self,
-        database: Database,
-        make_model_gradient: Callable[[], ModelRow],
-        make_geometry_3atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Gradient with incorrect shape raises ValueError on insert."""
-        with database.session() as session:
-            model = make_model_gradient()
-            session.add(model)
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="gradient",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            geom = make_geometry_3atom()
-            session.add(geom)
-            session.flush()
-
-            # Create gradient with incorrect shape (only 6 elements instead of 9)
-            gradient = GradientRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
-            )
-            gradient.geometry = geom
-            session.add(gradient)
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_valid_gradient_shape_on_update(
-        self,
-        database: Database,
-        make_model_gradient: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Gradient shape is validated on update."""
-        with database.session() as session:
-            model = make_model_gradient()
-            session.add(model)
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="gradient",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            geom = make_geometry_2atom()
-            session.add(geom)
-            session.flush()
-
-            # Create gradient with correct shape (3 * 2 = 6 elements)
-            gradient = GradientRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
-            )
-            gradient.geometry = geom
-            session.add(gradient)
-            session.flush()
-
-            # Update to new valid values (same shape)
-            gradient.value = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-            session.flush()
-
-            assert gradient.value.shape == (6,)
-
-    def test_invalid_gradient_shape_on_update(
-        self,
-        database: Database,
-        make_model_gradient: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Updating gradient to incorrect shape raises ValueError."""
-        with database.session() as session:
-            model = make_model_gradient()
-            session.add(model)
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="gradient",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            geom = make_geometry_2atom()
-            session.add(geom)
-            session.flush()
-
-            # Create gradient with correct shape (3 * 2 = 6 elements)
-            gradient = GradientRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
-            )
-            gradient.geometry = geom
-            session.add(gradient)
-            session.flush()
-
-            # Update to invalid shape
-            gradient.value = np.array([1.0, 2.0, 3.0])
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_none_geometry_skipped(
-        self, database: Database, make_model_gradient: Callable[[], ModelRow]
-    ) -> None:
-        """Gradient with None geometry is skipped by validation."""
-        with database.session() as session:
-            model = make_model_gradient()
-            session.add(model)
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="gradient",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create gradient with no geometry relationship loaded
-            gradient = GradientRow(
-                geometry_id=None,
-                calculation_id=calc.id,
-                value=np.array([0.1, 0.2, 0.3]),
-            )
-            session.add(gradient)
-
-            # Event should handle None geometry gracefully
-            # (the insert will fail on FK constraint, but event shouldn't crash)
-
-
-class TestVerifyHessianShape:
-    """Tests for verify_hessian_shape event listener."""
-
-    def test_valid_hessian_shape_on_insert(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Hessian with correct shape (3*natoms, 3*natoms) is accepted on insert."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with correct shape (6x6 for 2 atoms)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-            session.flush()
-
-            assert hessian.value.shape == (6, 6)
-            assert len(hessian.geometry.symbols) == NATOMS_TWO
-
-    def test_invalid_hessian_shape_on_insert(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_3atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Hessian with incorrect shape raises ValueError on insert."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_3atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with incorrect shape (6x6 instead of 9x9)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_hessian_wrong_first_dimension(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Hessian with wrong first dimension raises ValueError."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with wrong first dimension (5x6 instead of 6x6)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((5, 6), dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_hessian_wrong_second_dimension(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Hessian with wrong second dimension raises ValueError."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with wrong second dimension (6x5 instead of 6x6)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 5), dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_hessian_1d_array_rejected(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Hessian with 1D array (wrong dimensionality) raises ValueError."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with 1D array (flattened, wrong dimensionality)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random(36, dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_valid_hessian_shape_on_update(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Hessian shape is validated on update."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with correct shape (6x6)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-            session.flush()
-
-            # Update to new valid values (same shape)
-            hessian.value = np.eye(6, dtype=np.float32)
-            session.flush()
-
-            assert hessian.value.shape == (6, 6)
-
-    def test_invalid_hessian_shape_on_update(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Updating Hessian to incorrect shape raises ValueError."""
-        with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with correct shape (6x6)
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
-            )
-            hessian.geometry = geom
-            session.add(hessian)
-            session.flush()
-
-            # Update to invalid shape (3x3)
-            hessian.value = rng.random((3, 3), dtype=np.float32)
-
-            with pytest.raises(ValueError, match="does not match expected"):
-                session.flush()
-
-    def test_none_geometry_skipped(
-        self, database: Database, make_model_frequency: Callable[[], ModelRow]
-    ) -> None:
-        """Hessian with None geometry is skipped by validation."""
-        with database.session() as session:
-            model = make_model_frequency()
-            session.add(model)
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create Hessian with no geometry relationship loaded
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=None,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
-            )
-            session.add(hessian)
-
-            # Event should handle None geometry gracefully
-            # (the insert will fail on FK constraint, but event shouldn't crash)
-
-
 class TestVerifyTrajectoryGeometryNdim:
-    """Tests for verify_trajectory_geometry_ndim_insert event listener."""
+    """Tests for verify_trajectory_geometry_ndim event listener."""
 
     def test_matching_index_and_ndim(
         self, database: Database, make_geometry_5atom: Callable[[], GeometryRow]
@@ -1050,6 +544,19 @@ class TestVerifyTrajectoryGeometryNdim:
             assert link2.index == [1, 2]
 
 
+def _identity_for_algorithm(
+    stat_point: StationaryPointRow, algorithm_name: str
+) -> IdentityRow:
+    """Return the single identity attached to `stat_point` for `algorithm_name`."""
+    matches = [
+        ident
+        for ident in stat_point.identities
+        if ident.algorithm.name == algorithm_name
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 class TestAddInchiIdentity:
     """Tests for add_inchi_identity event listener."""
 
@@ -1092,8 +599,8 @@ class TestAddInchiIdentity:
             session.add(stat_point)
             session.flush()
 
-            assert len(stat_point.identities) == 1
-            identity = stat_point.identities[0]
+            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            identity = _identity_for_algorithm(stat_point, "rdkit inchi")
             assert identity.algorithm.kind == "stereoisomer"
             assert identity.algorithm.name == "rdkit inchi"
             assert identity.value.startswith("InChI=")
@@ -1159,13 +666,17 @@ class TestAddInchiIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            assert len(stat1.identities) == 1
-            assert len(stat2.identities) == 1
-            assert stat1.identities[0].id == stat2.identities[0].id
-            assert stat1.identities[0].value == stat2.identities[0].value
+            assert len(stat1.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            assert len(stat2.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            inchi1 = _identity_for_algorithm(stat1, "rdkit inchi")
+            inchi2 = _identity_for_algorithm(stat2, "rdkit inchi")
+            assert inchi1.id == inchi2.id
+            assert inchi1.value == inchi2.value
 
-            identity_count = session.query(IdentityRow).count()
-            assert identity_count == 1
+            # Both stationary points share the same 3 identities (InChI, SMILES,
+            # and Hill formula), so only 3 IdentityRows should exist in total.
+            identity_count = len(session.exec(select(IdentityRow)).all())
+            assert identity_count == EXPECTED_IDENTITY_COUNT_THREE
 
     def test_different_geometries_create_different_identities(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1221,13 +732,17 @@ class TestAddInchiIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            assert len(stat1.identities) == 1
-            assert len(stat2.identities) == 1
-            assert stat1.identities[0].id != stat2.identities[0].id
-            assert stat1.identities[0].value != stat2.identities[0].value
+            assert len(stat1.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            assert len(stat2.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            inchi1 = _identity_for_algorithm(stat1, "rdkit inchi")
+            inchi2 = _identity_for_algorithm(stat2, "rdkit inchi")
+            assert inchi1.id != inchi2.id
+            assert inchi1.value != inchi2.value
 
-            identity_count = session.query(IdentityRow).count()
-            assert identity_count == EXPECTED_IDENTITY_COUNT_TWO
+            # Each stationary point has its own set of 3 identities (InChI,
+            # SMILES, and Hill formula), none of which are shared.
+            identity_count = len(session.exec(select(IdentityRow)).all())
+            assert identity_count == EXPECTED_IDENTITY_COUNT_SIX
 
     def test_inchi_identity_added_with_relationship_object(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1266,20 +781,20 @@ class TestAddInchiIdentity:
             session.flush()
 
             # Identity should be auto-populated despite using relationship objects
-            assert len(stat_point.identities) == 1
-            identity = stat_point.identities[0]
+            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            identity = _identity_for_algorithm(stat_point, "rdkit inchi")
             assert identity.algorithm.kind == "stereoisomer"
             assert identity.algorithm.name == "rdkit inchi"
             assert identity.value.startswith("InChI=")
 
 
-class TestAddSmilesExtras:
-    """Tests for add_smiles_extras_before_flush event listener."""
+class TestAddSmilesIdentity:
+    """Tests for the SMILES identity attached by the registry identity listener."""
 
-    def test_smiles_extra_added_on_insert(
+    def test_smiles_identity_added_on_insert(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """SMILES is automatically attached as IdentityExtraRow to stationary point."""
+        """SMILES is automatically attached as an IdentityRow to stationary point."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1315,23 +830,10 @@ class TestAddSmilesExtras:
             session.add(stat_point)
             session.flush()
 
-            # Should have one InChI identity with one SMILES extra
-            assert len(stat_point.identities) == 1
-            identity = stat_point.identities[0]
-            assert identity.algorithm.name == "rdkit inchi"
-
-            # Reload to get the identity_extras relationship populated
-            session.expire_all()
-            identity = session.get(IdentityRow, identity.id)
-            assert identity is not None
-            assert len(identity.identity_extras) == EXPECTED_EXTRAS_COUNT
-
-            # Check for SMILES extra
-            extras_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity.identity_extras
-            }
-            assert "rdkit smiles" in extras_by_attr
-            assert extras_by_attr["rdkit smiles"] == "C"  # Methane SMILES
+            # Should have identities for InChI, SMILES, and Hill formula.
+            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            smiles_identity = _identity_for_algorithm(stat_point, "rdkit smiles")
+            assert smiles_identity.value == "C"  # Methane SMILES
 
     def test_duplicate_smiles_not_created(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1394,26 +896,21 @@ class TestAddSmilesExtras:
             session.add_all([stat1, stat2])
             session.flush()
 
-            # Both should share the same identity (InChI)
-            assert stat1.identities[0].id == stat2.identities[0].id
+            # Both stationary points should share the same SMILES identity row.
+            smiles1 = _identity_for_algorithm(stat1, "rdkit smiles")
+            smiles2 = _identity_for_algorithm(stat2, "rdkit smiles")
+            assert smiles1.id == smiles2.id
+            assert smiles1.value == "C"
 
-            # Should have two extras (SMILES + Hill) for the shared identity
-            session.expire_all()
-            identity = session.get(IdentityRow, stat1.identities[0].id)
-            assert identity is not None
-            assert len(identity.identity_extras) == EXPECTED_EXTRAS_COUNT
-
-            # Check for SMILES extra
-            extras_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity.identity_extras
-            }
-            assert "rdkit smiles" in extras_by_attr
-            assert extras_by_attr["rdkit smiles"] == "C"
+            # Only 3 IdentityRows total (InChI, SMILES, Hill formula), shared
+            # between both stationary points.
+            identity_count = len(session.exec(select(IdentityRow)).all())
+            assert identity_count == EXPECTED_IDENTITY_COUNT_THREE
 
     def test_different_smiles_for_different_geometries(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """Different geometries create different SMILES extras."""
+        """Different geometries create different SMILES identities."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1466,39 +963,21 @@ class TestAddSmilesExtras:
             session.add_all([stat1, stat2])
             session.flush()
 
-            # Should have different identities
-            assert stat1.identities[0].id != stat2.identities[0].id
-
-            # Each identity should have two extras (SMILES + Hill)
-            session.expire_all()
-            identity1 = session.get(IdentityRow, stat1.identities[0].id)
-            identity2 = session.get(IdentityRow, stat2.identities[0].id)
-            assert identity1 is not None
-            assert identity2 is not None
-
-            assert len(identity1.identity_extras) == EXPECTED_EXTRAS_COUNT
-            extras1_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity1.identity_extras
-            }
-            assert "rdkit smiles" in extras1_by_attr
-            assert extras1_by_attr["rdkit smiles"] == "C"
-
-            assert len(identity2.identity_extras) == EXPECTED_EXTRAS_COUNT
-            extras2_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity2.identity_extras
-            }
-            assert "rdkit smiles" in extras2_by_attr
+            smiles1 = _identity_for_algorithm(stat1, "rdkit smiles")
+            smiles2 = _identity_for_algorithm(stat2, "rdkit smiles")
+            assert smiles1.id != smiles2.id
+            assert smiles1.value == "C"
             # Ethane SMILES should be different from methane
-            assert extras2_by_attr["rdkit smiles"] != "C"
+            assert smiles2.value != "C"
 
 
-class TestAddHillExtras:
-    """Tests for add_hill_extras_before_flush event listener."""
+class TestAddHillIdentity:
+    """Tests for the Hill formula identity attached by the identity listener."""
 
-    def test_hill_extra_added_on_insert(
+    def test_hill_identity_added_on_insert(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """Hill formula is attached as IdentityExtraRow to stationary point."""
+        """Hill formula is automatically attached as an IdentityRow."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1534,25 +1013,10 @@ class TestAddHillExtras:
             session.add(stat_point)
             session.flush()
 
-            # Should have one InChI identity with two extras (SMILES + Hill formula)
-            assert len(stat_point.identities) == 1
-            identity = stat_point.identities[0]
-            assert identity.algorithm.name == "rdkit inchi"
-
-            # Reload to get the identity_extras relationship populated
-            session.expire_all()
-            identity = session.get(IdentityRow, identity.id)
-            assert identity is not None
-            assert len(identity.identity_extras) == EXPECTED_EXTRAS_COUNT
-
-            # Check for both SMILES and Hill formula extras
-            extras_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity.identity_extras
-            }
-            assert "rdkit smiles" in extras_by_attr
-            assert extras_by_attr["rdkit smiles"] == "C"  # Methane SMILES
-            assert "hill formula" in extras_by_attr
-            assert extras_by_attr["hill formula"] == "CH4"  # Methane Hill formula
+            # Should have identities for InChI, SMILES, and Hill formula.
+            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
+            hill_identity = _identity_for_algorithm(stat_point, "hill formula")
+            assert hill_identity.value == "CH4"  # Methane Hill formula
 
     def test_duplicate_hill_not_created(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
@@ -1615,28 +1079,21 @@ class TestAddHillExtras:
             session.add_all([stat1, stat2])
             session.flush()
 
-            # Both should share the same identity (InChI)
-            assert stat1.identities[0].id == stat2.identities[0].id
+            # Both stationary points should share the same Hill formula identity.
+            hill1 = _identity_for_algorithm(stat1, "hill formula")
+            hill2 = _identity_for_algorithm(stat2, "hill formula")
+            assert hill1.id == hill2.id
+            assert hill1.value == "CH4"
 
-            # Should have two extras (SMILES + Hill) for the shared identity
-            session.expire_all()
-            identity = session.get(IdentityRow, stat1.identities[0].id)
-            assert identity is not None
-            assert len(identity.identity_extras) == EXPECTED_EXTRAS_COUNT
-
-            # Check for both SMILES and Hill formula extras
-            extras_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity.identity_extras
-            }
-            assert "rdkit smiles" in extras_by_attr
-            assert extras_by_attr["rdkit smiles"] == "C"
-            assert "hill formula" in extras_by_attr
-            assert extras_by_attr["hill formula"] == "CH4"
+            # Only 3 IdentityRows total (InChI, SMILES, Hill formula), shared
+            # between both stationary points.
+            identity_count = len(session.exec(select(IdentityRow)).all())
+            assert identity_count == EXPECTED_IDENTITY_COUNT_THREE
 
     def test_different_hill_for_different_geometries(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """Different geometries create different Hill formula extras."""
+        """Different geometries create different Hill formula identities."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1689,235 +1146,276 @@ class TestAddHillExtras:
             session.add_all([stat1, stat2])
             session.flush()
 
-            # Should have different identities
-            assert stat1.identities[0].id != stat2.identities[0].id
-
-            # Each identity should have two extras (SMILES + Hill)
-            session.expire_all()
-            identity1 = session.get(IdentityRow, stat1.identities[0].id)
-            identity2 = session.get(IdentityRow, stat2.identities[0].id)
-            assert identity1 is not None
-            assert identity2 is not None
-
-            assert len(identity1.identity_extras) == EXPECTED_EXTRAS_COUNT
-            extras1_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity1.identity_extras
-            }
-            assert "rdkit smiles" in extras1_by_attr
-            assert extras1_by_attr["rdkit smiles"] == "C"
-            assert "hill formula" in extras1_by_attr
-            assert extras1_by_attr["hill formula"] == "CH4"
-
-            assert len(identity2.identity_extras) == EXPECTED_EXTRAS_COUNT
-            extras2_by_attr = {
-                extra.algorithm.name: extra.value for extra in identity2.identity_extras
-            }
-            assert "rdkit smiles" in extras2_by_attr
-            # Ethane SMILES should be different from methane
-            assert extras2_by_attr["rdkit smiles"] != "C"
-            assert "hill formula" in extras2_by_attr
+            hill1 = _identity_for_algorithm(stat1, "hill formula")
+            hill2 = _identity_for_algorithm(stat2, "hill formula")
+            assert hill1.id != hill2.id
+            assert hill1.value == "CH4"
             # Ethane Hill formula should be different from methane
-            assert extras2_by_attr["hill formula"] != "CH4"
+            assert hill2.value != "CH4"
+
+
+def _water() -> GeometryRow:
+    return GeometryRow(
+        symbols=["O", "H", "H"],
+        coordinates=[[0.0, 0.0, 0.0], [0.0, 0.76, 0.59], [0.0, -0.76, 0.59]],
+    )
+
+
+def _methane() -> GeometryRow:
+    return GeometryRow(
+        symbols=["C", "H", "H", "H", "H"],
+        coordinates=[
+            [0.0, 0.0, 0.0],
+            [0.63, 0.63, 0.63],
+            [-0.63, -0.63, 0.63],
+            [-0.63, 0.63, -0.63],
+            [0.63, -0.63, -0.63],
+        ],
+    )
+
+
+def _calculation() -> CalculationRow:
+    return CalculationRow(model=ModelRow(program="x", method="y"), calc_type="test")
+
+
+class TestVerifyPropertyValues:
+    """Tests for verify_property_values_before_flush event listener."""
+
+    def test_integer_energy_stored_as_float64(self, database: Database) -> None:
+        """Integer energies are accepted and stored at full precision."""
+        with database.session() as session:
+            pv = PropertyValueRow(
+                geometry=_water(),
+                calculation=_calculation(),
+                property_kind_name="energy",
+                value=-1234.567891234,
+            )
+            pv_int = PropertyValueRow(
+                geometry=pv.geometry,
+                calculation=pv.calculation,
+                property_kind_name="energy",
+                value=-1,
+            )
+            session.add_all([pv, pv_int])
+            session.commit()
+            session.refresh(pv)
+
+            assert pv.value.dtype == np.float64
+            assert float(pv.value) == -1234.567891234  # noqa: PLR2004
+            assert float(pv_int.value) == -1.0
+
+    def test_gradient_accepts_flat_and_matrix_shapes(self, database: Database) -> None:
+        """Gradients may be flat ``(3N,)`` or ``(N, 3)``."""
+        with database.session() as session:
+            geo, calc = _water(), _calculation()
+            for value in (np.zeros(9), np.zeros((3, 3))):
+                session.add(
+                    PropertyValueRow(
+                        geometry=geo,
+                        calculation=calc,
+                        property_kind_name="gradient",
+                        value=value,
+                    )
+                )
+            session.commit()
+
+    @pytest.mark.parametrize(
+        ("kind", "value"),
+        [
+            ("energy", [1.0, 2.0]),
+            ("gradient", np.zeros(6)),
+            ("hessian", np.zeros((9, 6))),
+            ("hessian", [[1.0], [1.0, 2.0]]),
+        ],
+    )
+    def test_invalid_shape_raises(
+        self, database: Database, kind: str, value: object
+    ) -> None:
+        """Values with an invalid shape are rejected."""
+        with database.session() as session:
+            session.add(
+                PropertyValueRow(
+                    geometry=_water(),
+                    calculation=_calculation(),
+                    property_kind_name=kind,
+                    value=value,
+                )
+            )
+            with pytest.raises(ValueError, match="expected shape"):
+                session.flush()
+
+    def test_property_kind_loaded_from_database(self, database: Database) -> None:
+        """A `PropertyKindRow` loaded from the database validates values."""
+        with database.session() as session:
+            kind = session.get(PropertyKindRow, "energy")
+            assert kind is not None
+            session.add(
+                PropertyValueRow(
+                    geometry=_water(),
+                    calculation=_calculation(),
+                    property_kind=kind,
+                    value=[1.0, 2.0],
+                )
+            )
+            with pytest.raises(ValueError, match="expected shape"):
+                session.flush()
 
 
 class TestVerifyValidStationaryHasHessian:
     """Tests for verify_valid_stationary_has_hessian event listener."""
 
-    def test_valid_stationary_with_hessian_accepted(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Stationary point marked valid with a Hessian is accepted."""
+    def test_validated_without_hessian_raises(self, database: Database) -> None:
+        """A validated stationary point requires a Hessian."""
         with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
+            stp = StationaryPointRow(
+                geometry=_water(), calculation=_calculation(), is_validated=True
             )
-            session.add(calc)
-            session.flush()
-
-            # Add a Hessian to the geometry
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
-            )
-            session.add(hessian)
-            session.flush()
-
-            # Create a valid stationary point - should succeed
-            stat = StationaryPointRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                order=0,
-                is_validated=True,
-            )
-            session.add(stat)
-            session.flush()
-
-            assert stat.is_validated is True
-            assert len(geom.hessians) == 1
-
-    def test_valid_stationary_without_hessian_rejected(
-        self,
-        database: Database,
-        make_model_opt: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Stationary point marked valid without a Hessian is rejected."""
-        with database.session() as session:
-            model = make_model_opt()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="opt",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
-            )
-            session.add(calc)
-            session.flush()
-
-            # Create a valid stationary point without Hessian - should fail
-            stat = StationaryPointRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                order=0,
-                is_validated=True,
-            )
-            session.add(stat)
-
-            with pytest.raises(ValueError, match="cannot be marked as valid"):
+            session.add(stp)
+            with pytest.raises(ValueError, match="without a Hessian"):
                 session.flush()
 
-    def test_invalid_stationary_without_hessian_accepted(
-        self,
-        database: Database,
-        make_model_opt: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Stationary point not marked valid can exist without a Hessian."""
+    def test_validated_with_hessian(self, database: Database) -> None:
+        """A validated stationary point with a Hessian is accepted."""
         with database.session() as session:
-            model = make_model_opt()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="opt",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
+            geo, calc = _water(), _calculation()
+            hess = PropertyValueRow(
+                geometry=geo,
+                calculation=calc,
+                property_kind_name="hessian",
+                value=np.zeros((9, 9)),
             )
-            session.add(calc)
-            session.flush()
+            stp = StationaryPointRow(geometry=geo, calculation=calc, is_validated=True)
+            session.add_all([hess, stp])
+            session.commit()
 
-            # Create stationary point with is_validated=False - should succeed
-            stat = StationaryPointRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                order=0,
-                is_validated=False,
-            )
-            session.add(stat)
-            session.flush()
+            assert stp.is_validated
 
-            assert stat.is_validated is False
 
-    def test_valid_stationary_update_to_validated_without_hessian_rejected(
-        self,
-        database: Database,
-        make_model_opt: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Updating stationary to validated without Hessian is rejected."""
+class TestTrajectoryNdimPersisted:
+    """The inferred trajectory ndim is written to the database."""
+
+    def test_inferred_ndim_persisted(self, database: Database) -> None:
+        """`TrajectoryRow.ndim` inferred from a link index is persisted."""
         with database.session() as session:
-            model = make_model_opt()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
-
-            calc = CalculationRow(
-                calc_type="opt",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
+            traj = TrajectoryRow()
+            link = GeometryTrajectoryLink(
+                geometry=_water(), trajectory=traj, index=[0, 1]
             )
-            session.add(calc)
-            session.flush()
+            session.add_all([traj, link])
+            session.commit()
+            traj_id = traj.id
 
-            # Create invalid stationary point
-            stat = StationaryPointRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                order=0,
-                is_validated=False,
-            )
-            session.add(stat)
-            session.flush()
-
-            # Try to update to validated without Hessian - should fail
-            stat.is_validated = True
-
-            with pytest.raises(ValueError, match="cannot be marked as valid"):
-                session.flush()
-
-    def test_update_to_validated_with_hessian_accepted(
-        self,
-        database: Database,
-        make_model_frequency: Callable[[], ModelRow],
-        make_geometry_2atom: Callable[[], GeometryRow],
-    ) -> None:
-        """Updating stationary to validated with Hessian is accepted."""
         with database.session() as session:
-            model = make_model_frequency()
-            geom = make_geometry_2atom()
-            session.add_all([model, geom])
-            session.flush()
+            traj = session.get(TrajectoryRow, traj_id)
+            assert traj is not None
+            assert traj.ndim == NDIM_2
 
-            calc = CalculationRow(
-                calc_type="frequency",
-                model_id=model.id,
-                input_provenance={},
-                output_provenance={},
+
+class TestIdentityGenerationFailures:
+    """Identity algorithms that fail are skipped with a warning."""
+
+    def test_metal_skips_unsupported_algorithms(self, database: Database) -> None:
+        """Metal-containing geometries are stored with only supported identities."""
+        with database.session() as session:
+            geo = GeometryRow(
+                symbols=["Fe", "Cl", "Cl"],
+                coordinates=[[0.0, 0.0, 0.0], [2.2, 0.0, 0.0], [-2.2, 0.0, 0.0]],
+                spin=4,
             )
-            session.add(calc)
-            session.flush()
+            stp = StationaryPointRow(geometry=geo, calculation=_calculation())
+            session.add(stp)
+            with pytest.warns(IdentityGenerationWarning, match="metals"):
+                session.commit()
 
-            # Create non-validated stationary point
-            stat = StationaryPointRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                order=0,
-                is_validated=False,
+            assert [(i.algorithm.name, i.value) for i in stp.identities] == [
+                ("hill formula", "Cl2Fe")
+            ]
+
+    def test_empty_identity_value_skipped(self, database: Database) -> None:
+        """Empty identity values are not stored."""
+        with database.session() as session:
+            geo = GeometryRow(
+                symbols=["H", "H"], coordinates=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]]
             )
-            session.add(stat)
-            session.flush()
+            stp = StationaryPointRow(geometry=geo, calculation=_calculation())
+            session.add(stp)
+            with pytest.warns(IdentityGenerationWarning, match="empty identity"):
+                session.commit()
 
-            # Add a Hessian
-            rng = np.random.default_rng()
-            hessian = HessianRow(
-                geometry_id=geom.id,
-                calculation_id=calc.id,
-                value=rng.random((6, 6), dtype=np.float32),
+            assert all(ident.value for ident in stp.identities)
+
+
+class TestIdentitiesOnGeometryChange:
+    """Identities are regenerated when a stationary point's geometry changes."""
+
+    def test_reassigned_geometry_updates_identities(self, database: Database) -> None:
+        """Reassigning `geometry` replaces the stationary point's identities."""
+        with database.session() as session:
+            stp = StationaryPointRow(geometry=_water(), calculation=_calculation())
+            session.add(stp)
+            session.commit()
+            assert "H2O" in {i.value for i in stp.identities}
+
+            stp.geometry = _methane()
+            session.commit()
+
+            values = {i.value for i in stp.identities}
+            assert "CH4" in values
+            assert "H2O" not in values
+
+
+class TestPendingSiblingIdentities:
+    """Stationary points added in the same flush share their identities."""
+
+    def test_same_flush_shares_identities(self, database: Database) -> None:
+        """Equivalent stationary points in one flush reuse the same identities."""
+        with database.session() as session:
+            calc = _calculation()
+            stp1 = StationaryPointRow(geometry=_water(), calculation=calc)
+            stp2 = StationaryPointRow(geometry=_water(), calculation=calc)
+            session.add_all([stp1, stp2])
+            session.commit()
+
+            assert {i.id for i in stp1.identities} == {i.id for i in stp2.identities}
+            assert len(session.exec(select(IdentityRow)).all()) == (
+                EXPECTED_IDENTITY_COUNT_THREE
             )
-            session.add(hessian)
-            session.flush()
 
-            # Update to validated with Hessian present - should succeed
-            stat.is_validated = True
-            session.flush()
 
-            assert stat.is_validated is True
+class TestListenerScope:
+    """Listeners only apply to `AutostorageSession`s."""
+
+    def test_plain_session_has_no_listeners(self, database: Database) -> None:
+        """A plain `sqlmodel.Session` does not attach identities."""
+        with Session(database.engine) as session:
+            stp = StationaryPointRow(geometry=_water(), calculation=_calculation())
+            session.add(stp)
+            session.commit()
+
+            assert stp.identities == []
+
+
+class TestPersistedSiblingIdentities:
+    """Child identities of persisted siblings are passed to algorithms."""
+
+    def test_sibling_smiles_reused(self, database: Database) -> None:
+        """A new stationary point reuses its persisted sibling's SMILES."""
+        with database.session() as session:
+            calc = _calculation()
+            stp1 = StationaryPointRow(geometry=_water(), calculation=calc)
+            session.add(stp1)
+            session.commit()
+
+            # Replace the canonical SMILES with an equivalent, non-canonical one
+            smiles = _identity_for_algorithm(stp1, "rdkit smiles")
+            stp1.identities.remove(smiles)
+            stp1.identities.append(
+                IdentityRow(algorithm_id=smiles.algorithm_id, value="[H]O[H]")
+            )
+            session.commit()
+
+            stp2 = StationaryPointRow(geometry=_water(), calculation=calc)
+            session.add(stp2)
+            session.commit()
+
+            assert _identity_for_algorithm(stp2, "rdkit smiles").value == "[H]O[H]"

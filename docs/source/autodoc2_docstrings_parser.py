@@ -9,7 +9,7 @@ class NapoleonParser(MystParser):
         # Get the Sphinx configuration
         config = document.settings.env.config
 
-        parsed_content = str(docstring.NumpyDocstring(inputstring, config))
+        parsed_content = str(docstring.GoogleDocstring(inputstring, config))
         return super().parse(parsed_content, document)
 
 

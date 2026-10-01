@@ -13,6 +13,19 @@ from sqlmodel import Field
 
 __all__ = ["CompressedArrayTypeDecorator", "CompressedJSONTypeDecorator", "Role"]
 
+MAX_DECOMPRESSED_BYTES = 1 << 30
+"""Upper bound on the decompressed size of a stored blob (guards against zip bombs)."""
+
+
+def _decompress(data: bytes, max_size: int = MAX_DECOMPRESSED_BYTES) -> bytes:
+    """Decompress zlib `data`, refusing to inflate beyond `max_size` bytes."""
+    decompressor = zlib.decompressobj()
+    result = decompressor.decompress(data, max_size)
+    if decompressor.unconsumed_tail:
+        msg = f"Decompressed data exceeds the {max_size}-byte limit."
+        raise ValueError(msg)
+    return result
+
 
 def _fk_field(target: str, *, nullable: bool = False, index: bool = True) -> Any:  # noqa: ANN401
     """Build a standard foreign-key Field with ON DELETE CASCADE."""
@@ -35,7 +48,13 @@ class CompressedArrayTypeDecorator(TypeDecorator):
     impl = LargeBinary
     cache_ok = True
 
-    def __init__(self, dtype: Any = np.float64, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(
+        self,
+        dtype: Any = np.float64,  # noqa: ANN401
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> None:
+        """Create the decorator, storing arrays as `dtype` (or as given if None)."""
         super().__init__(*args, **kwargs)
         self.dtype = dtype
 
@@ -44,7 +63,8 @@ class CompressedArrayTypeDecorator(TypeDecorator):
         if value is None:
             return None
         buffer = BytesIO()
-        np.save(buffer, np.asarray(value, dtype=self.dtype), allow_pickle=False)
+        array = np.asarray(value, dtype=self.dtype)
+        np.save(buffer, array, allow_pickle=False)
         return zlib.compress(buffer.getvalue())
 
     def process_result_value(
@@ -55,7 +75,7 @@ class CompressedArrayTypeDecorator(TypeDecorator):
         """Convert compressed `.npy` bytes from the database back to a NumPy array."""
         if value is None:
             return None
-        return np.load(BytesIO(zlib.decompress(value)), allow_pickle=False)
+        return np.load(BytesIO(_decompress(value)), allow_pickle=False)
 
 
 class CompressedJSONTypeDecorator(TypeDecorator):
@@ -79,7 +99,7 @@ class CompressedJSONTypeDecorator(TypeDecorator):
         """Convert compressed JSON bytes from the database back to a dict."""
         if value is None:
             return None
-        json_bytes = zlib.decompress(value)
+        json_bytes = _decompress(value)
         return json.loads(json_bytes.decode("utf-8"))
 
 

@@ -232,3 +232,5 @@ __marimo__/
 # Scratch files
 .scratch/
 example*.db
+tests/scratch*
+/*.db

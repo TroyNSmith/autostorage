@@ -5,6 +5,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+> **Breaking (no migrations):** databases created by earlier versions are not compatible —
+> the `energy`/`gradient`/`hessian`/`identity_extras` tables were replaced, `property_kind` is
+> keyed by name, and `identity_algorithm.deterministic` was dropped. Identity values generated
+> by automol 0.0.26 may also differ from earlier ones for the same geometry (strict Hill order,
+> e.g. `NH3` → `H3N`; new Lewis-structure perception for radicals and charged species).
+
+### Added
+
+- **`PropertyKindRow` / `PropertyValueRow`**: Generic property storage replacing `EnergyRow`, `GradientRow`, and `HessianRow`. Values are attached with `property_kind_name` (e.g. `"energy"`) or `property_kind`, validated against the kind's expected shape on flush, and stored as float64 (Hessians as float32).
+- **`PropertyKind` / `PropertyKindRegistry`** (`property.py`): In-memory registry of property kinds (name, validation function, storage dtype), with default `energy_property_kind`, `gradient_property_kind`, and `hessian_property_kind`. Its entries are mirrored by name into `property_kind` when a `Database` is opened.
+- **`query` module**: `query.stationary_point_by_identity(algorithm, value, include_pseudo=False)` selects stationary points by identity, accepting an `automol.Algorithm` (e.g. `automol.rdkit_inchi`), an `IdentityAlgorithmRow`, or an algorithm name.
+- **`AutostorageSession`**: `sqlmodel.Session` subclass returned by `Database.session()`. All session-level listeners are bound to it rather than to every SQLAlchemy `Session` in the process.
+- **`IdentityGenerationWarning`**: Issued when an identity algorithm fails for a geometry (e.g. metals, no valid Lewis structure, failed InChI) or returns an empty value; that identity is skipped instead of aborting the flush.
+- **`Database` context manager** (`with Database(path) as db: ...` closes it on exit).
+- Top-level exports for `PropertyKindRow`, `PropertyValueRow`, `PropertyKind`, `AutostorageSession`, and `IdentityGenerationWarning`.
+
+### Changed
+
+- **Bump** `automol` to v0.0.26.
+- **`GeometryRow`** now gets automol 0.0.26's validation: symbols are checked and canonicalized (`"cl"` → `"Cl"`), spin must be consistent with the electron count, and `pint.Quantity` coordinates are converted to Angstrom (via automol's `CoordinatesField`).
+- **`GeometryRow.relabel_atoms()`** returns a new, unsaved row with a fresh `id`, so the result can be persisted.
+- **Every identity now lives in `IdentityRow`**: `add_registry_identities_before_flush` attaches identities for all registered algorithms to `StationaryPointRow.identities` via `IdentityStationaryLink`, instead of routing some to a child `IdentityExtraRow`. Identities are also regenerated when a stationary point's geometry is reassigned, and stationary points added in the same flush share sibling identities (e.g. SMILES).
+- **`IdentityAlgorithmRow.name`** is unique, and `create_identity_algorithms()` updates the `kind`/parent of existing rows to match the registry.
+- **`Database.session()`** returns a `sqlmodel.Session` (`AutostorageSession`), so `session.exec(...)` is available. The engine URL is built with `sqlalchemy.URL.create`, so paths containing `?` or `#` work.
+- **Trajectory ndim check** is now a session-level `before_flush` listener (`verify_trajectory_geometry_ndim`), so an inferred `TrajectoryRow.ndim` is persisted.
+- Decompression of stored arrays/JSON is capped at `types.MAX_DECOMPRESSED_BYTES`.
+
+### Fixed
+
+- Opening an existing database from a new process no longer inserts duplicate `property_kind` rows.
+- Property kinds loaded from the database (rather than the in-process registry objects) no longer fail validation with a `TypeError`.
+- Energies and gradients are stored at float64 precision again (were float32); integer energies and `(N, 3)` gradients are accepted.
+- `verify_valid_stationary_has_hessian` is enforced again (it was disabled and referenced the removed `GeometryRow.hessians`).
+- `tests/scratch*.py` files are no longer imported by `pytest --doctest-modules`.
+
+### Removed
+
+- **`IdentityExtraRow`**: Non-deterministic identifiers (e.g. SMILES, Hill formula) are no longer stored in a separate `identity_extras` table.
+- **`EnergyRow`, `GradientRow`, `HessianRow`**: Replaced by `PropertyValueRow`.
+- **`IdentityAlgorithmRow.deterministic`**: Removed along with `automol.Algorithm.deterministic` in automol 0.0.26.
+- Unused `algorithm_cache` columns on `IdentityRow` and `IdentityStationaryLink`.
+- `stereomolgraph` and `irmsd` dev dependencies (no longer used by automol).
+
 ## [0.0.17] - 2026-09-19
 
 ### Added

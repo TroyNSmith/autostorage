@@ -47,6 +47,7 @@ depend on lower ones, never the reverse:
 ```
 autostorage.database            (highest)
 autostorage.events
+autostorage.query | autostorage.property
 autostorage.models
 autostorage.types                (lowest)
 ```
@@ -56,10 +57,11 @@ module structure — all modules live directly in `src/autostorage/`.
 
 ### Relationship to automol
 
-Row models extend automol's core data models directly rather than wrapping them: `GeometryRow`
-extends `automol.Geometry`, `IdentityRow` extends `automol.Identity`. Any conversion to/from
-other external formats is delegated to automol's own conversion functions rather than
-reimplemented here.
+`GeometryRow` extends `automol.Geometry` directly rather than wrapping it, so automol's
+validation (element symbols, spin parity, atom count, `pint` coordinates) applies to it. Identity
+algorithms come from `automol.AlgorithmRegistry` (module-level `Algorithm` instances such as
+`automol.rdkit_inchi`) and are mirrored by name into `IdentityAlgorithmRow`. Any conversion
+to/from other external formats is delegated to automol rather than reimplemented here.
 
 ### Current module map
 
@@ -68,44 +70,51 @@ reimplemented here.
     `CalculationTrajectoryLink`, `GeometryTrajectoryLink`, `IdentityStationaryLink`,
     `StageStationaryLink`, `StepValidationLink`
   - Existential data rows: `GeometryRow` (extends `automol.Geometry`), `TrajectoryRow`,
-    `ModelRow`, `CalculationRow`, result rows (`EnergyRow`, `GradientRow`, `HessianRow`),
+    `ModelRow`, `CalculationRow`, `PropertyKindRow` (keyed by name), `PropertyValueRow`,
     `ValidationRow`
   - Stationary point rows: `StationaryPointRow`
   - Reaction network rows: `StageRow`, `StepRow` (a step between two stages, with a barrierless
     flag)
-  - Identity rows: `IdentityRow` (extends `automol.Identity`), `IdentityExtraRow`
+  - Identity rows: `IdentityAlgorithmRow` (mirrors an `automol.Algorithm`), `IdentityRow`
 
-- `events.py` — SQLAlchemy ORM event listeners, by concern:
-  - Shape validation: `verify_gradient_shapes_before_flush`, `verify_hessian_shapes_before_flush`
-  - Trajectory validation: `verify_trajectory_geometry_ndim_insert` (ensures geometry index
-    length matches trajectory ndim)
-  - Auto-managed identities: `add_inchi_identities_before_flush` (attaches an InChI `IdentityRow`
-    to newly inserted stationary points), `add_smiles_extras_before_flush` /
-    `add_hill_extras_before_flush` (attach SMILES / Hill formula as `IdentityExtraRow`s once an
-    InChI identity is present). Private `_find_or_create_identity`/`_find_or_create_identity_extra`
-    helpers dedup these against existing rows and pending session inserts.
+- `property.py` — `PropertyKind` specs (name, validation function, storage dtype) and the
+  `PropertyKindRegistry`, with the default `energy`, `gradient`, and `hessian` kinds.
+
+- `query.py` — Select-statement factories (e.g. `stationary_point_by_identity`).
+
+- `events.py` — `AutostorageSession` (the session type the listeners below are bound to) and
+  SQLAlchemy ORM event listeners, by concern:
+  - Registry seeding: `create_identity_algorithms`, `create_property_kinds`
+  - Property validation: `verify_property_values_before_flush` (shape check + dtype cast),
+    `verify_valid_stationary_has_hessian`
+  - Trajectory validation: `verify_trajectory_geometry_ndim` (ensures geometry index length
+    matches trajectory ndim, inferring and persisting it if unset)
+  - Auto-managed identities: `add_registry_identities_before_flush` attaches an `IdentityRow` for
+    every registered algorithm to new stationary points (and regenerates them when the geometry
+    is reassigned). Failing algorithms are skipped with an `IdentityGenerationWarning`.
   - Step validation: `sort_step_stage_ids` (auto-sorts stage_id1 < stage_id2),
     `verify_step_barrierless_consistency` (verifies is_barrierless matches stage_id_ts state)
 
-- `database.py` — `Database`: SQLite engine/session manager. `__init__` creates the engine
-  (with `PRAGMA foreign_keys=ON` and a sort-keys JSON serializer) and the schema via
-  `SQLModel.metadata.create_all`; `session()` returns a fresh `Session` bound to that engine
-  (use as a context manager; nothing auto-commits); `close()` disposes the engine.
+- `database.py` — `Database`: SQLite engine/session manager (also a context manager). `__init__`
+  creates the engine (with `PRAGMA foreign_keys=ON` and a sort-keys JSON serializer), the schema
+  via `SQLModel.metadata.create_all`, and seeds the registry tables; `session()` returns a fresh
+  `AutostorageSession` (use as a context manager; nothing auto-commits); `close()` disposes the
+  engine.
 
 - `types.py` — Type definitions and utilities:
   - `Role` (StrEnum: INPUT/OUTPUT) — relationship between calculations and geometries/trajectories
-  - `CompressedArrayTypeDecorator` — SQLAlchemy `TypeDecorator` storing NumPy arrays as
-    zlib-compressed binary data in SQLite
+  - `CompressedArrayTypeDecorator` / `CompressedJSONTypeDecorator` — SQLAlchemy `TypeDecorator`s
+    storing NumPy arrays / JSON as zlib-compressed binary data (decompression is size-capped)
   - `_fk_field()` — helper for building foreign-key fields with ON DELETE CASCADE
 
 ### Docstrings
 
-NumPy docstring convention (`tool.ruff.lint.pydocstyle` = `"numpy"`), and doctest examples in
-docstrings are executed as tests — keep them runnable and accurate.
+Google docstring convention (`tool.ruff.lint.pydocstyle` = `"google"`, matching automol), and
+doctest examples in docstrings are executed as tests — keep them runnable and accurate.
 
 ### Notes
 
 - Minimize chat/response verbosity when performing work to reduce unnecessary token costs.
-- Keep docstrings and comments minimal: one-line NumPy-style summaries where the convention
+- Keep docstrings and comments minimal: one-line Google-style summaries where the convention
   allows, no restating what a name/type hint already conveys. Reserve comments for genuinely
   non-obvious invariants — most docstrings in this repo don't need that much.

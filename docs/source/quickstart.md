@@ -20,70 +20,77 @@ Requires Python ≥3.12.
 ## Usage
 
 ```python
+import automol
 import numpy as np
+from sqlmodel import select
+
 from autostorage import (
     CalculationGeometryLink,
     CalculationRow,
     Database,
-    EnergyRow,
     GeometryRow,
     ModelRow,
+    PropertyValueRow,
     Role,
+    StationaryPointRow,
+    energy_property_kind,
+    query,
 )
 
 # Open (or create) a SQLite database; ":memory:" also works for scratch use.
-db = Database("workflow.db")
+with Database("workflow.db") as db, db.session() as session:
+    # Create a model specifying the program, method, and basis.
+    model = ModelRow(program="orca", method="b3lyp", basis="def2-svp")
 
-# Work within a session context.
-with db.session() as session:
-    # Create a model specifying the calculation type, program, method, and basis.
-    model = ModelRow(
-        calc_type="energy",
-        program="orca",
-        method="b3lyp",
-        basis="def2-svp",
-    )
-    
     # Create a calculation using this model.
-    calc = CalculationRow(model=model)
-    
-    # Create a geometry.
+    calc = CalculationRow(model=model, calc_type="energy")
+
+    # Create a geometry (validated by automol: known elements, consistent spin).
     geo = GeometryRow(
         symbols=["H", "O", "H"],
-        coordinates=np.array([[0, 0, 0.8], [0, 0, 0], [0.8, 0, 0]]),
+        coordinates=np.array([[0, 0, 0.96], [0, 0, 0], [0.93, 0, -0.24]]),
         charge=0,
         spin=0,
     )
-    
+
     # Link the geometry to the calculation as an input.
-    link = CalculationGeometryLink(
-        calculation=calc,
-        geometry=geo,
-        role=Role.INPUT,
-    )
-    
+    link = CalculationGeometryLink(calculation=calc, geometry=geo, role=Role.INPUT)
+
     # Add all objects to the session and commit.
     session.add_all([model, calc, geo, link])
     session.commit()
-    
-    # Attach an energy result to the geometry/calculation pair.
-    energy = EnergyRow(geometry=geo, calculation=calc, value=-76.02)
+
+    # Attach an energy to the geometry/calculation pair. Values are validated
+    # against their property kind ("energy", "gradient", "hessian") on flush.
+    energy = PropertyValueRow(
+        geometry=geo,
+        calculation=calc,
+        property_kind_name=energy_property_kind.name,
+        value=-76.02,
+    )
     session.add(energy)
     session.commit()
-    
-    # Query the result back by filtering on geometry and calculation.
-    found = session.query(EnergyRow).filter_by(
-        geometry_id=geo.id,
-        calculation_id=calc.id,
-    ).first()
-    assert found is not None
-    print(found.value)
 
-db.close()
+    # Query the energy back by geometry and property kind.
+    found = session.exec(
+        select(PropertyValueRow).where(
+            PropertyValueRow.geometry_id == geo.id,
+            PropertyValueRow.property_kind_name == "energy",
+        )
+    ).one()
+    print(float(found.value))
+
+    # Stationary points are automatically given identities (InChI, SMILES,
+    # Hill formula), which can be used to look them up.
+    session.add(StationaryPointRow(geometry=geo, calculation=calc))
+    session.commit()
+    stmt = query.stationary_point_by_identity(automol.rdkit_inchi, "InChI=1S/H2O/h1H2")
+    print(session.exec(stmt).all())
 ```
 
-The `Database.session()` method returns a standard SQLAlchemy `Session` that supports the
-context manager protocol. Sessions automatically handle transaction management — commit
-explicitly to persist changes, and unhandled exceptions trigger a rollback.
+The `Database.session()` method returns an `AutostorageSession` (a `sqlmodel.Session`) that
+supports the context manager protocol. Validation and automatic identities are only applied by
+these sessions. Commit explicitly to persist changes; closing a session rolls back anything
+uncommitted.
 
 See the {doc}`API reference <apidocs/index>` for full details on every model and method.

@@ -6,16 +6,17 @@ from autostorage import (
     CalculationGeometryLink,
     CalculationRow,
     Database,
-    EnergyRow,
     GeometryRow,
-    GradientRow,
-    HessianRow,
     ModelRow,
+    PropertyValueRow,
     Role,
     StageRow,
     StageStationaryLink,
     StationaryPointRow,
     StepRow,
+    energy_property_kind,
+    gradient_property_kind,
+    hessian_property_kind,
 )
 
 # Create database
@@ -78,12 +79,14 @@ with db.session() as session:
     session.add_all([link_geom1, link_geom2])
 
     # Add energy results for both geometries
-    energy1 = EnergyRow(
+    energy1 = PropertyValueRow(
+        property_kind_name=energy_property_kind.name,
         geometry_id=geom1.id,
         calculation_id=calc1.id,
         value=-76.4268193,  # Hartree
     )
-    energy2 = EnergyRow(
+    energy2 = PropertyValueRow(
+        property_kind_name=energy_property_kind.name,
         geometry_id=geom2.id,
         calculation_id=calc2.id,
         value=-76.4265821,  # Hartree (slightly higher energy)
@@ -91,7 +94,8 @@ with db.session() as session:
     session.add_all([energy1, energy2])
 
     # Add gradient results (3 atoms x 3 coords = 9 values, flattened)
-    gradient1 = GradientRow(
+    gradient1 = PropertyValueRow(
+        property_kind_name=gradient_property_kind.name,
         geometry_id=geom1.id,
         calculation_id=calc1.id,
         value=np.array(
@@ -108,7 +112,8 @@ with db.session() as session:
             ]
         ),
     )
-    gradient2 = GradientRow(
+    gradient2 = PropertyValueRow(
+        property_kind_name=gradient_property_kind.name,
         geometry_id=geom2.id,
         calculation_id=calc2.id,
         value=np.array(
@@ -127,7 +132,8 @@ with db.session() as session:
     )
     session.add_all([gradient1, gradient2])
 
-    # Add hessian results (9x9 matrix for 3 atoms)
+    # Add Hessian results (9x9 matrix for 3 atoms); required to mark a
+    # stationary point as validated
     # Create a simple symmetric positive-definite hessian
     hess1_matrix = np.random.RandomState(42).randn(9, 9) * 0.1
     hess1_matrix = (hess1_matrix + hess1_matrix.T) / 2  # Make symmetric
@@ -137,15 +143,17 @@ with db.session() as session:
     hess2_matrix = (hess2_matrix + hess2_matrix.T) / 2
     hess2_matrix += np.eye(9) * 2
 
-    hessian1 = HessianRow(
+    hessian1 = PropertyValueRow(
+        property_kind_name=hessian_property_kind.name,
         geometry_id=geom1.id,
         calculation_id=calc1.id,
-        value=hess1_matrix.astype(np.float32),
+        value=hess1_matrix,  # Stored as float32
     )
-    hessian2 = HessianRow(
+    hessian2 = PropertyValueRow(
+        property_kind_name=hessian_property_kind.name,
         geometry_id=geom2.id,
         calculation_id=calc2.id,
-        value=hess2_matrix.astype(np.float32),
+        value=hess2_matrix,  # Stored as float32
     )
     session.add_all([hessian1, hessian2])
     session.flush()

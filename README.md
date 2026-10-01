@@ -7,7 +7,7 @@
 
 A [SQLModel](https://sqlmodel.tiangolo.com/)/SQLAlchemy persistence layer for computational chemistry workflow data, built on top of [`automol`](https://github.com/avcopan/automol). It stores molecular geometries, chemical identities, trajectories, stationary points, calculation results (energies, gradients, Hessians), and the calculations/reaction steps that connect them, as a graph of related rows in a SQLite database.
 
-Row models extend `automol`'s core data models directly rather than wrapping them — `GeometryRow` extends `automol.Geometry`, `IdentityRow` extends `automol.Identity` — so any data already expressed in `automol` types can be persisted with no conversion step.
+`GeometryRow` extends `automol.Geometry` directly rather than wrapping it, so geometries already expressed in `automol` types can be persisted with no conversion step (and are validated by automol). Chemical identities (InChI, SMILES, Hill formula) are generated automatically for stationary points using the algorithms in `automol.AlgorithmRegistry`.
 
 ## Installation
 
@@ -29,69 +29,75 @@ Requires Python ≥3.12.
 ## Usage
 
 ```python
+import automol
 import numpy as np
+from sqlmodel import select
+
 from autostorage import (
     CalculationGeometryLink,
     CalculationRow,
     Database,
-    EnergyRow,
     GeometryRow,
     ModelRow,
+    PropertyValueRow,
     Role,
+    StationaryPointRow,
+    energy_property_kind,
+    query,
 )
 
 # Open (or create) a SQLite database; ":memory:" also works for scratch use.
-db = Database("workflow.db")
-
-# Work within a session context.
-with db.session() as session:
-    # Create a model specifying the calculation type, program, method, and basis.
-    model = ModelRow(
-        calc_type="energy",
-        program="orca",
-        method="b3lyp",
-        basis="def2-svp",
-    )
+with Database("workflow.db") as db, db.session() as session:
+    # Create a model specifying the program, method, and basis.
+    model = ModelRow(program="orca", method="b3lyp", basis="def2-svp")
 
     # Create a calculation using this model.
-    calc = CalculationRow(model=model)
+    calc = CalculationRow(model=model, calc_type="energy")
 
-    # Create a geometry.
+    # Create a geometry (validated by automol: known elements, consistent spin).
     geo = GeometryRow(
         symbols=["H", "O", "H"],
-        coordinates=np.array([[0, 0, 0.8], [0, 0, 0], [0.8, 0, 0]]),
+        coordinates=np.array([[0, 0, 0.96], [0, 0, 0], [0.93, 0, -0.24]]),
         charge=0,
         spin=0,
     )
 
     # Link the geometry to the calculation as an input.
-    link = CalculationGeometryLink(
-        calculation=calc,
-        geometry=geo,
-        role=Role.INPUT,
-    )
+    link = CalculationGeometryLink(calculation=calc, geometry=geo, role=Role.INPUT)
 
     # Add all objects to the session and commit.
     session.add_all([model, calc, geo, link])
     session.commit()
 
-    # Attach an energy result to the geometry/calculation pair.
-    energy = EnergyRow(geometry=geo, calculation=calc, value=-76.02)
+    # Attach an energy to the geometry/calculation pair. Values are validated
+    # against their property kind ("energy", "gradient", "hessian") on flush.
+    energy = PropertyValueRow(
+        geometry=geo,
+        calculation=calc,
+        property_kind_name=energy_property_kind.name,
+        value=-76.02,
+    )
     session.add(energy)
     session.commit()
 
-    # Query the result back by filtering on geometry and calculation.
-    found = session.query(EnergyRow).filter_by(
-        geometry_id=geo.id,
-        calculation_id=calc.id,
-    ).first()
-    assert found is not None
-    print(found.value)
+    # Query the energy back by geometry and property kind.
+    found = session.exec(
+        select(PropertyValueRow).where(
+            PropertyValueRow.geometry_id == geo.id,
+            PropertyValueRow.property_kind_name == "energy",
+        )
+    ).one()
+    print(float(found.value))
 
-db.close()
+    # Stationary points are automatically given identities (InChI, SMILES,
+    # Hill formula), which can be used to look them up.
+    session.add(StationaryPointRow(geometry=geo, calculation=calc))
+    session.commit()
+    stmt = query.stationary_point_by_identity(automol.rdkit_inchi, "InChI=1S/H2O/h1H2")
+    print(session.exec(stmt).all())
 ```
 
-`Database.session()` returns a standard SQLAlchemy `Session` that supports the context manager protocol. Sessions don't commit automatically — call `session.commit()` explicitly to persist changes.
+`Database.session()` returns an `AutostorageSession` (a `sqlmodel.Session`, so `session.exec(...)` is available) that supports the context manager protocol. Validation and automatic identities are only applied by these sessions. Sessions don't commit automatically — call `session.commit()` explicitly to persist changes.
 
 For a full worked example covering geometries, trajectories, results, stationary points, stages, and steps, see [`examples/stationary.py`](examples/stationary.py).
 
