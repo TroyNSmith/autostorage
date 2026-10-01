@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlmodel import col, select
 
-from autostorage import AutostorageSession, PropertyKindRegistry
+from autostorage import AutostorageSession, PropertyKindRegistry, events
 from autostorage.database import Database
 from autostorage.models import (
     CalculationGeometryLink,
@@ -85,6 +85,27 @@ class TestDatabaseInit:
         """Database creates a SQLAlchemy engine."""
         assert database.engine is not None
         assert "sqlite" in str(database.engine.url)
+
+    def test_init_failure_closes_database(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The engine is disposed if registry seeding fails."""
+        closed: list[Database] = []
+        close = Database.close
+
+        def _fail(_session: Session) -> None:
+            msg = "seeding failed"
+            raise RuntimeError(msg)
+
+        def _close(db: Database) -> None:
+            closed.append(db)
+            close(db)
+
+        monkeypatch.setattr(events, "create_property_kinds", _fail)
+        monkeypatch.setattr(Database, "close", _close)
+        with pytest.raises(RuntimeError, match="seeding failed"):
+            Database(db_path)
+        assert len(closed) == 1
 
 
 class TestDatabaseSession:

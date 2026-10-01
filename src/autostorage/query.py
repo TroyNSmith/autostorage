@@ -11,6 +11,8 @@ from .models import (
     StationaryPointRow,
 )
 
+__all__ = ["stationary_point_by_identity"]
+
 
 def stationary_point_by_identity(
     algorithm: Algorithm | IdentityAlgorithmRow | str,

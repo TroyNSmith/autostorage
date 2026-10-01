@@ -6,6 +6,7 @@ from typing import Any, Self
 
 from automol import Geometry, IdentityKind
 from automol.utils.types import CoordinatesField
+from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import (
     JSON,
     CheckConstraint,
@@ -20,11 +21,42 @@ from sqlmodel import (
 )
 from sqlmodel.main import SQLModelConfig
 
-from .types import (
-    CompressedArrayTypeDecorator,
-    Role,
-    _fk_field,
-)
+from .types import CompressedArrayTypeDecorator, Role
+
+
+def _fk_field(
+    target: str,
+    *,
+    nullable: bool = False,
+    index: bool = True,
+    primary_key: bool = False,
+) -> Any:  # noqa: ANN401
+    """Build a foreign-key `Field` to `target` with ON DELETE CASCADE."""
+    return Field(
+        default=None,
+        foreign_key=target,
+        ondelete="CASCADE",
+        nullable=nullable,
+        index=index,
+        primary_key=primary_key,
+    )
+
+
+def _link_fk_field(target: str) -> Any:  # noqa: ANN401
+    """Build a cascading foreign key that is part of a link table's primary key."""
+    # The composite primary key only indexes its leading column; link tables add
+    # an explicit index for the other column in `__table_args__`.
+    return _fk_field(target, index=False, primary_key=True)
+
+
+def _role_column() -> Column:
+    """Build a column storing a `Role` by value (``"input"``/``"output"``)."""
+    return Column(Enum(Role, values_callable=lambda roles: [r.value for r in roles]))
+
+
+def _json_dict_column() -> Column:
+    """Build a JSON column whose dict value tracks in-place changes."""
+    return Column(MutableDict.as_mutable(JSON))
 
 
 # 0. Link rows
@@ -34,30 +66,14 @@ class CalculationGeometryLink(SQLModel, table=True):
 
     __tablename__ = "calculation_geometry_link"
     __table_args__ = (
-        # The composite primary key only serves lookups keyed by `geometry_id`
-        # (its leading column); this adds a matching index for `calculation_id`.
         Index("ix_calculation_geometry_link_calculation_id", "calculation_id"),
     )
 
-    geometry_id: uuid.UUID | None = Field(
-        default=None,
-        foreign_key="geometry.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
+    geometry_id: uuid.UUID | None = _link_fk_field("geometry.id")
     """Foreign key to the linked `GeometryRow`."""
-    calculation_id: int | None = Field(
-        default=None,
-        foreign_key="calculation.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
+    calculation_id: int | None = _link_fk_field("calculation.id")
     """Foreign key to the linked `CalculationRow`."""
-    role: Role = Field(
-        sa_column=Column(Enum(Role, values_callable=lambda x: [e.value for e in x]))
-    )
+    role: Role = Field(sa_column=_role_column())
     """Role the `GeometryRow` plays for `CalculationRow` (input/output)."""
     geometry: "GeometryRow" = Relationship(back_populates="calculation_links")
     """The linked `GeometryRow`."""
@@ -73,21 +89,9 @@ class GeometryTrajectoryLink(SQLModel, table=True):
         Index("ix_geometry_trajectory_link_trajectory_id", "trajectory_id"),
     )
 
-    geometry_id: uuid.UUID | None = Field(
-        default=None,
-        foreign_key="geometry.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    geometry_id: uuid.UUID | None = _link_fk_field("geometry.id")
     """Foreign key to the linked `GeometryRow`."""
-    trajectory_id: int | None = Field(
-        default=None,
-        foreign_key="trajectory.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    trajectory_id: int | None = _link_fk_field("trajectory.id")
     """Foreign key to the linked `TrajectoryRow`."""
     index: list[int] | None = Field(default=None, sa_column=Column(JSON))
     """Position of `geometry` within the `trajectory`."""
@@ -98,128 +102,71 @@ class GeometryTrajectoryLink(SQLModel, table=True):
 
 
 class CalculationTrajectoryLink(SQLModel, table=True):
-    """Association table linking trajectories to a calculation.
-
-    Attributes:
-        trajectory_id: Foreign key to the linked trajectory.
-        calculation_id: Foreign key to the linked calculation.
-        role: Role the trajectory plays for this calculation (input/output).
-        trajectory: The linked trajectory (back-populated from
-            `TrajectoryRow.calculation_links`).
-        calculation: The linked calculation (back-populated from
-            `CalculationRow.trajectory_links`).
-    """
+    """Association table linking trajectories to a calculation."""
 
     __tablename__ = "calculation_trajectory_link"
     __table_args__ = (
         Index("ix_calculation_trajectory_link_calculation_id", "calculation_id"),
     )
 
-    trajectory_id: int | None = Field(
-        default=None,
-        foreign_key="trajectory.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
-    calculation_id: int | None = Field(
-        default=None,
-        foreign_key="calculation.id",
-        ondelete="CASCADE",
-        nullable=False,
-        primary_key=True,
-    )
-    role: Role = Field(
-        sa_column=Column(Enum(Role, values_callable=lambda x: [e.value for e in x]))
-    )
-
+    trajectory_id: int | None = _link_fk_field("trajectory.id")
+    """Foreign key to the linked `TrajectoryRow`."""
+    calculation_id: int | None = _link_fk_field("calculation.id")
+    """Foreign key to the linked `CalculationRow`."""
+    role: Role = Field(sa_column=_role_column())
+    """Role the `TrajectoryRow` plays for `CalculationRow` (input/output)."""
     trajectory: "TrajectoryRow" = Relationship(back_populates="calculation_links")
+    """The linked `TrajectoryRow`."""
     calculation: "CalculationRow" = Relationship(back_populates="trajectory_links")
+    """The linked `CalculationRow`."""
 
 
 class StageStationaryLink(SQLModel, table=True):
     """Association table linking stationary points to reaction stages.
 
-    Attributes:
-        stationary_id: Foreign key to the linked stationary point.
-        stage_id: Foreign key to the linked reaction stage.
+    Relationships are managed via `StationaryPointRow.stages` and
+    `StageRow.stationaries`, using this table as their `link_model`.
     """
 
     __tablename__ = "stage_stationary_link"
     __table_args__ = (Index("ix_stage_stationary_link_stage_id", "stage_id"),)
 
-    stationary_id: int | None = Field(
-        default=None,
-        foreign_key="stationary_point.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    stage_id: int | None = Field(
-        default=None,
-        foreign_key="stage.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    stationary_id: int | None = _link_fk_field("stationary_point.id")
+    """Foreign key to the linked `StationaryPointRow`."""
+    stage_id: int | None = _link_fk_field("stage.id")
+    """Foreign key to the linked `StageRow`."""
 
 
 class StepValidationLink(SQLModel, table=True):
     """Association table linking validations to a step.
 
-    Attributes:
-        step_id: Foreign key to the linked step.
-        validation_id: Foreign key to the linked validation.
-
-    Note:
-        Relationships are managed bidirectionally via `ValidationRow.step` and
-        `StepRow.validations` using this table's `link_model`.
+    Relationships are managed via `ValidationRow.step` and `StepRow.validations`,
+    using this table as their `link_model`.
     """
 
     __tablename__ = "step_validation_link"
     __table_args__ = (Index("ix_step_validation_link_validation_id", "validation_id"),)
 
-    step_id: int = Field(
-        foreign_key="step.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    validation_id: int = Field(
-        foreign_key="validation.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    step_id: int | None = _link_fk_field("step.id")
+    """Foreign key to the linked `StepRow`."""
+    validation_id: int | None = _link_fk_field("validation.id")
+    """Foreign key to the linked `ValidationRow`."""
 
 
 class IdentityStationaryLink(SQLModel, table=True):
     """Association table linking chemical identities to stationary points.
 
-    Attributes:
-        stationary_id: Foreign key to the linked stationary point.
-        identity_id: Foreign key to the linked chemical identity.
-
-    Note:
-        Relationships are managed bidirectionally via `StationaryPointRow.identities`
-        and `IdentityRow.stationary_points` using this table's `link_model`.
+    Relationships are managed via `StationaryPointRow.identities` and
+    `IdentityRow.stationary_points`, using this table as their `link_model`.
     """
 
     __tablename__ = "identity_stationary_link"
     __table_args__ = (Index("ix_identity_stationary_link_identity_id", "identity_id"),)
 
-    stationary_id: int = Field(
-        foreign_key="stationary_point.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    identity_id: int = Field(
-        foreign_key="identity.id",
-        primary_key=True,
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    stationary_id: int | None = _link_fk_field("stationary_point.id")
+    """Foreign key to the linked `StationaryPointRow`."""
+    identity_id: int | None = _link_fk_field("identity.id")
+    """Foreign key to the linked `IdentityRow`."""
 
 
 # 1. Existential data rows
@@ -279,6 +226,8 @@ class TrajectoryRow(SQLModel, table=True):
 
     Attributes:
         id: Primary key.
+        ndim: Length of each linked geometry's `index` (inferred from the first link
+            if unset).
         geometry_links: Raw link rows connecting geometries to this trajectory.
         calculation_links: Raw link rows connecting calculations to this trajectory.
     """
@@ -317,7 +266,7 @@ class ModelRow(SQLModel, table=True):
     method: str
     basis: str | None = None
     keywords: dict[str, Any] | None = Field(
-        default_factory=dict, sa_column=Column(JSON)
+        default_factory=dict, sa_column=_json_dict_column()
     )
 
     calculations: list["CalculationRow"] = Relationship(back_populates="model")
@@ -344,19 +293,13 @@ class CalculationRow(SQLModel, table=True):
     __tablename__ = "calculation"
 
     id: int | None = Field(default=None, primary_key=True)
-    model_id: int | None = Field(
-        default=None,
-        foreign_key="model.id",
-        ondelete="CASCADE",
-        nullable=False,
-        index=True,
-    )
+    model_id: int | None = _fk_field("model.id")
     calc_type: str
     input_provenance: dict[str, Any] | None = Field(
-        default_factory=dict, sa_column=Column(JSON)
+        default_factory=dict, sa_column=_json_dict_column()
     )
     output_provenance: dict[str, Any] | None = Field(
-        default_factory=dict, sa_column=Column(JSON)
+        default_factory=dict, sa_column=_json_dict_column()
     )
 
     model: "ModelRow" = Relationship(back_populates="calculations")
@@ -403,6 +346,7 @@ class PropertyValueRow(SQLModel, table=True):
     geometry_id: uuid.UUID | None = _fk_field("geometry.id")
     """Foreign key to the linked `GeometryRow`."""
     geometry: "GeometryRow" = Relationship(back_populates="properties")
+    """The linked `GeometryRow`."""
     calculation_id: int | None = _fk_field("calculation.id")
     """Foreign key to the linked `CalculationRow`."""
     calculation: "CalculationRow" = Relationship(back_populates="properties")
@@ -437,7 +381,7 @@ class ValidationRow(SQLModel, table=True):
     calculation_id: int | None = _fk_field("calculation.id")
 
     method: str
-    extras: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    extras: dict[str, Any] = Field(default_factory=dict, sa_column=_json_dict_column())
 
     calculation: "CalculationRow" = Relationship(back_populates="validations")
     step: "StepRow" = Relationship(
@@ -536,34 +480,16 @@ class StepRow(SQLModel, table=True):
             text("coalesce(stage_id_ts, 0)"),
             unique=True,
         ),
-        # `stage_id1` is already covered as the leading column of the two indexes
-        # above, but is indexed explicitly here too for symmetry/clarity.
-        Index("ix_step_stage_id1", "stage_id1"),
-        Index("ix_step_stage_id2", "stage_id2"),
-        Index("ix_step_stage_id_ts", "stage_id_ts"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     """Primary key."""
-    stage_id1: int | None = Field(
-        default=None,
-        foreign_key="stage.id",
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    # Lookups by `stage_id1` use the unique indexes above (leading column)
+    stage_id1: int | None = _fk_field("stage.id", index=False)
     """The step's first non-TS stage (reactant or product)."""
-    stage_id2: int | None = Field(
-        default=None,
-        foreign_key="stage.id",
-        ondelete="CASCADE",
-        nullable=False,
-    )
+    stage_id2: int | None = _fk_field("stage.id")
     """The step's second non-TS stage (reactant or product)."""
-    stage_id_ts: int | None = Field(
-        default=None,
-        foreign_key="stage.id",
-        ondelete="CASCADE",
-    )
+    stage_id_ts: int | None = _fk_field("stage.id", nullable=True)
     """The step's TS stage."""
     is_barrierless: bool = False
     """Whether this step proceeds without a formal TS."""
@@ -603,11 +529,8 @@ class IdentityAlgorithmRow(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(unique=True)
     kind: IdentityKind
-    parent_algorithm_id: int | None = Field(
-        default=None,
-        foreign_key="identity_algorithm.id",
-        ondelete="CASCADE",
-        nullable=True,
+    parent_algorithm_id: int | None = _fk_field(
+        "identity_algorithm.id", nullable=True, index=False
     )
 
     parent_algorithm: "IdentityAlgorithmRow" = Relationship(
@@ -637,13 +560,7 @@ class IdentityRow(SQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    algorithm_id: int | None = Field(
-        default=None,
-        foreign_key="identity_algorithm.id",
-        ondelete="CASCADE",
-        nullable=False,
-        index=True,
-    )
+    algorithm_id: int | None = _fk_field("identity_algorithm.id")
     value: str
 
     algorithm: "IdentityAlgorithmRow" = Relationship(back_populates="identities")

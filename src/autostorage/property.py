@@ -8,6 +8,15 @@ from pydantic import BaseModel, ConfigDict
 
 from .models import GeometryRow
 
+__all__ = [
+    "PropertyKind",
+    "PropertyKindRegistry",
+    "PropertyValidationProtocol",
+    "energy_property_kind",
+    "gradient_property_kind",
+    "hessian_property_kind",
+]
+
 
 @runtime_checkable
 class PropertyValidationProtocol(Protocol):

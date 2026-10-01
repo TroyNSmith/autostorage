@@ -4,16 +4,23 @@ import json
 from functools import partial
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 
 from sqlalchemy import URL, create_engine, event
 from sqlmodel import SQLModel
 
-# Ensure all modules are loaded with the database
+# Importing `events` also imports `models`, registering every table on
+# `SQLModel.metadata` and every ORM listener before the schema is created.
 from . import events
-from .models import *  # noqa: F403
 
 __all__ = ["Database"]
+
+
+def _enable_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:  # noqa: ANN401
+    """Enable foreign-key enforcement, which SQLite disables by default."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 class Database:
@@ -40,22 +47,20 @@ class Database:
             # `CalculationRow.input_provenance == prov`) match regardless of the
             # key insertion order used to build the Python dict being compared.
             json_serializer=partial(json.dumps, sort_keys=True),
-            # Allow multithreading
+            # Let the connection pool hand connections to other threads. Sessions
+            # are not thread-safe: use a separate `session()` per thread.
             connect_args={"check_same_thread": False},
         )
+        event.listen(self.engine, "connect", _enable_foreign_keys)
 
-        @event.listens_for(self.engine, "connect")
-        def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
-            """Set SQLite pragmas."""
-            cursor = dbapi_connection.cursor()
-            # SQLite ignores FK constraints unless enabled
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
-
-        SQLModel.metadata.create_all(self.engine)
-        with self.session() as seed_session:
-            events.create_identity_algorithms(seed_session)
-            events.create_property_kinds(seed_session)
+        try:
+            SQLModel.metadata.create_all(self.engine)
+            with self.session() as seed_session:
+                events.create_identity_algorithms(seed_session)
+                events.create_property_kinds(seed_session)
+        except BaseException:
+            self.close()
+            raise
 
     def session(self) -> events.AutostorageSession:
         """Return a fresh session bound to this database's engine.

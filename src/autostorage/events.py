@@ -8,14 +8,13 @@ sessions in the same process.
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 from automol import Algorithm, AlgorithmRegistry
 from automol.utils.exc import GeometryConversionError
 from sqlalchemy import event, inspect
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Mapper, aliased
+from sqlalchemy.orm import Mapper, UOWTransaction, aliased
 from sqlmodel import Session, col, select
 
 from .models import (
@@ -116,22 +115,25 @@ def verify_step_barrierless_consistency(
     connection: Connection,  # noqa: ARG001
     target: StepRow,
 ) -> None:
-    """Verify is_barrierless consistency with stage_id_ts."""
-    if target.stage_id_ts is None:
-        if not target.is_barrierless:
-            msg = "Barrierless step (stage_id_ts=None) must have is_barrierless=True"
-            raise ValueError(msg)
-    elif target.is_barrierless:
+    """Verify that `is_barrierless` is True exactly when `stage_id_ts` is None."""
+    has_ts = target.stage_id_ts is not None
+    if target.is_barrierless == has_ts:
         msg = (
             "Step with transition state (stage_id_ts!=None) must have "
             "is_barrierless=False"
+            if has_ts
+            else "Barrierless step (stage_id_ts=None) must have is_barrierless=True"
         )
         raise ValueError(msg)
 
 
-def _pending(session: Session) -> list[Any]:
-    """Return new and modified objects in `session`."""
-    return list(session.new) + list(session.dirty)
+def _pending[T](session: Session, cls: type[T]) -> list[T]:
+    """Return new and modified objects of type `cls` in `session`.
+
+    A list (rather than a generator) is returned, so that callers may modify the
+    session while iterating.
+    """
+    return [obj for obj in (*session.new, *session.dirty) if isinstance(obj, cls)]
 
 
 def _property_kind_name(obj: PropertyValueRow) -> str | None:
@@ -145,7 +147,9 @@ def _property_kind_name(obj: PropertyValueRow) -> str | None:
     return obj.property_kind_name
 
 
-def _resolve_geometry(session: Session, obj: Any) -> GeometryRow | None:  # noqa: ANN401
+def _resolve_geometry(
+    session: Session, obj: PropertyValueRow | StationaryPointRow
+) -> GeometryRow | None:
     """Return the geometry of `obj`, via its relationship or foreign key."""
     if obj.geometry is not None:
         return obj.geometry
@@ -157,14 +161,11 @@ def _resolve_geometry(session: Session, obj: Any) -> GeometryRow | None:  # noqa
 @event.listens_for(AutostorageSession, "before_flush")
 def verify_property_values_before_flush(
     session: Session,
-    flush_context: Any,  # noqa: ARG001, ANN401
-    instances: Any,  # noqa: ARG001, ANN401
+    flush_context: UOWTransaction,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
 ) -> None:
     """Validate property values against their kind and cast them to its dtype."""
-    for obj in _pending(session):
-        if not isinstance(obj, PropertyValueRow):
-            continue
-
+    for obj in _pending(session, PropertyValueRow):
         name = _property_kind_name(obj)
         geo_row = _resolve_geometry(session, obj)
         if name is None or geo_row is None:
@@ -203,12 +204,12 @@ def _has_hessian(session: Session, geo_row: GeometryRow) -> bool:
 @event.listens_for(AutostorageSession, "before_flush")
 def verify_valid_stationary_has_hessian(
     session: Session,
-    flush_context: Any,  # noqa: ARG001, ANN401
-    instances: Any,  # noqa: ARG001, ANN401
+    flush_context: UOWTransaction,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
 ) -> None:
     """Verify that stationary points marked as validated have a Hessian."""
-    for obj in _pending(session):
-        if not isinstance(obj, StationaryPointRow) or not obj.is_validated:
+    for obj in _pending(session, StationaryPointRow):
+        if not obj.is_validated:
             continue
 
         geo_row = _resolve_geometry(session, obj)
@@ -223,8 +224,8 @@ def verify_valid_stationary_has_hessian(
 @event.listens_for(AutostorageSession, "before_flush")
 def verify_trajectory_geometry_ndim(
     session: Session,
-    flush_context: Any,  # noqa: ARG001, ANN401
-    instances: Any,  # noqa: ARG001, ANN401
+    flush_context: UOWTransaction,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
 ) -> None:
     """Ensure each linked geometry's index length matches its trajectory's ndim.
 
@@ -232,31 +233,39 @@ def verify_trajectory_geometry_ndim(
     This runs before the flush (rather than in a mapper-level "before_insert"
     hook) so that the inferred `TrajectoryRow.ndim` is persisted too.
     """
-    for target in _pending(session):
-        if not isinstance(target, GeometryTrajectoryLink):
+    for link in _pending(session, GeometryTrajectoryLink):
+        traj = _resolve_trajectory(session, link)
+        if traj is None:
             continue
 
-        trajectory = target.trajectory
-        if trajectory is None and target.trajectory_id is not None:
-            trajectory = session.get(TrajectoryRow, target.trajectory_id)
-        if trajectory is None:
-            continue
-
-        traj_ndim = trajectory.ndim
-        index_len = len(target.index) if target.index is not None else None
-
-        if index_len is not None and traj_ndim is not None and index_len != traj_ndim:
+        index_len = None if link.index is None else len(link.index)
+        if index_len is None:
+            if traj.ndim is not None:
+                msg = f"Geometry index is missing but trajectory ndim is {traj.ndim}"
+                raise ValueError(msg)
+        elif traj.ndim is None:
+            traj.ndim = index_len
+        elif index_len != traj.ndim:
             msg = (
                 f"Geometry index length {index_len} does not match "
-                f"trajectory ndim {traj_ndim}"
+                f"trajectory ndim {traj.ndim}"
             )
             raise ValueError(msg)
 
-        if traj_ndim is None and index_len is not None:
-            trajectory.ndim = index_len
-        elif index_len is None and traj_ndim is not None:
-            msg = f"Geometry index is missing but trajectory ndim is {traj_ndim}"
-            raise ValueError(msg)
+
+def _resolve_trajectory(
+    session: Session, link: GeometryTrajectoryLink
+) -> TrajectoryRow | None:
+    """Return the trajectory of `link`, via its relationship or foreign key."""
+    if link.trajectory is not None:
+        return link.trajectory
+    if link.trajectory_id is not None:
+        return session.get(TrajectoryRow, link.trajectory_id)
+    return None
+
+
+type _IdentityKey = tuple[int, str]
+"""An identity's `(algorithm_id, value)`, unique among `IdentityRow`s."""
 
 
 @dataclass
@@ -272,10 +281,13 @@ class _IdentityFlushContext:
 
     session: Session
     algorithm_ids: dict[str, int]
-    cache: dict[tuple[int, str], IdentityRow] = field(default_factory=dict)
+    algorithms: list[Algorithm] = field(
+        default_factory=lambda: list(_ordered_algorithms())
+    )
+    cache: dict[_IdentityKey, IdentityRow] = field(default_factory=dict)
     # Geometries of stationary points added in this flush, keyed by
     # (parent identity key, algorithm id) and then by their identity value
-    pending_siblings: dict[tuple[tuple[int, str], int], dict[str, GeometryRow]] = field(
+    pending_siblings: dict[tuple[_IdentityKey, int], dict[str, GeometryRow]] = field(
         default_factory=dict
     )
 
@@ -304,7 +316,7 @@ def _sibling_geometries(
     ctx: _IdentityFlushContext,
     obj: StationaryPointRow,
     algorithm_id: int,
-    parent_key: tuple[int, str],
+    parent_key: _IdentityKey,
 ) -> dict[str, GeometryRow]:
     """Return sibling geometries keyed by their `algorithm_id` identity value.
 
@@ -349,20 +361,14 @@ def _generate_identity(
     try:
         value = algorithm.identity_fn(geo_row, other_geos or None)
     except _IDENTITY_ERRORS as err:
-        msg = (
-            f"Skipping {algorithm.name!r} identity for GeometryRow {geo_row.id}: "
-            f"{type(err).__name__}: {err}"
-        )
-        warnings.warn(msg, IdentityGenerationWarning, stacklevel=2)
-        return None
-    if not value:
-        msg = (
-            f"Skipping {algorithm.name!r} identity for GeometryRow {geo_row.id}: "
-            "empty identity value."
-        )
-        warnings.warn(msg, IdentityGenerationWarning, stacklevel=2)
-        return None
-    return value
+        reason = f"{type(err).__name__}: {err}"
+    else:
+        if value:
+            return value
+        reason = "empty identity value."
+    msg = f"Skipping {algorithm.name!r} identity for GeometryRow {geo_row.id}: {reason}"
+    warnings.warn(msg, IdentityGenerationWarning, stacklevel=2)
+    return None
 
 
 def _attach_identities(ctx: _IdentityFlushContext, obj: StationaryPointRow) -> None:
@@ -378,8 +384,8 @@ def _attach_identities(ctx: _IdentityFlushContext, obj: StationaryPointRow) -> N
         # Without a geometry there is nothing to compute identities from
         return
 
-    keys: dict[str, tuple[int, str]] = {}
-    for algorithm in _ordered_algorithms():
+    keys: dict[str, _IdentityKey] = {}
+    for algorithm in ctx.algorithms:
         alg_id = ctx.algorithm_ids[algorithm.name]
         parent = algorithm.parent_algorithm
         parent_key = keys.get(parent.name) if parent is not None else None
@@ -414,8 +420,8 @@ def _geometry_changed(obj: StationaryPointRow) -> bool:
 @event.listens_for(AutostorageSession, "before_flush")
 def add_registry_identities_before_flush(
     session: Session,
-    flush_context: Any,  # noqa: ARG001, ANN401
-    instances: Any,  # noqa: ARG001, ANN401
+    flush_context: UOWTransaction,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
 ) -> None:
     """Attach registry identities to new stationary points.
 

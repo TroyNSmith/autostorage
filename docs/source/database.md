@@ -7,7 +7,7 @@ The `autostorage.database` module provides SQLite database connection management
 The `Database` class is a lightweight wrapper around SQLAlchemy's engine and session management, configured for SQLite with:
 
 - **Foreign key enforcement** — SQLite's `PRAGMA foreign_keys=ON` is automatically enabled
-- **Thread safety** — `check_same_thread=False` allows multi-threaded access
+- **Thread-safe pooling** — `check_same_thread=False` lets pooled connections move between threads; sessions are not thread-safe, so use one `session()` per thread
 - **Canonical JSON serialization** — JSON column comparisons work regardless of dict key order
 - **Automatic schema creation** — All SQLModel tables are created on initialization
 

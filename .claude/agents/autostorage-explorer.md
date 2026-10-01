@@ -27,7 +27,7 @@ enforced by import-linter): `database` > `events` > `query` | `property` > `mode
   automatic identity attachment (`add_registry_identities_before_flush`), and `StepRow`
   stage-order/TS-consistency checks.
 - `database.py` — `Database`: SQLite engine/session manager.
-- `types.py` — `Role`, `CompressedArrayTypeDecorator`, `CompressedJSONTypeDecorator`.
+- `types.py` — `Role`, `CompressedArrayTypeDecorator`.
 
 ## Known gotchas (check these before assuming a bug is novel)
 

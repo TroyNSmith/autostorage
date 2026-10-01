@@ -265,6 +265,21 @@ class TestModelRow:
             assert model.basis == "cc-pvdz"
             assert model.keywords == {"convergence": "tight", "scf_type": "df"}
 
+    def test_keywords_in_place_change_persists(
+        self, database: Database, b3lyp: ModelRow
+    ) -> None:
+        """In-place edits of `keywords` are persisted."""
+        with database.session() as session:
+            session.add(b3lyp)
+            session.commit()
+            assert b3lyp.keywords is not None
+            b3lyp.keywords["scf_type"] = "df"
+            session.commit()
+
+        with database.session() as session:
+            model = session.exec(select(ModelRow)).one()
+            assert model.keywords == {"scf_type": "df"}
+
 
 class TestCalculationRow:
     """Tests for CalculationRow model."""
@@ -316,6 +331,24 @@ class TestCalculationRow:
 
             with pytest.raises(IntegrityError):
                 session.commit()
+
+    def test_provenance_in_place_change_persists(
+        self, database: Database, calculation: CalculationRow
+    ) -> None:
+        """In-place edits of the provenance dicts are persisted."""
+        with database.session() as session:
+            session.add(calculation)
+            session.commit()
+            assert calculation.input_provenance is not None
+            assert calculation.output_provenance is not None
+            calculation.input_provenance["step"] = 2
+            del calculation.output_provenance["status"]
+            session.commit()
+
+        with database.session() as session:
+            calc = session.exec(select(CalculationRow)).one()
+            assert calc.input_provenance == {"source": "test", "step": 2}
+            assert calc.output_provenance == {}
 
 
 class TestResultRows:

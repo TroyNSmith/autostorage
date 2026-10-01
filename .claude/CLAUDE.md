@@ -65,7 +65,9 @@ to/from other external formats is delegated to automol rather than reimplemented
 
 ### Current module map
 
-- `models.py` — SQLModel row definitions, organized in sections:
+- `models.py` — SQLModel row definitions, organized in sections. Column helpers at the top:
+  `_fk_field()`/`_link_fk_field()` (ON DELETE CASCADE foreign keys), `_role_column()`, and
+  `_json_dict_column()` (`MutableDict` JSON, so in-place dict edits persist).
   - Link tables (named alphabetically by the entities they connect): `CalculationGeometryLink`,
     `CalculationTrajectoryLink`, `GeometryTrajectoryLink`, `IdentityStationaryLink`,
     `StageStationaryLink`, `StepValidationLink`
@@ -103,9 +105,8 @@ to/from other external formats is delegated to automol rather than reimplemented
 
 - `types.py` — Type definitions and utilities:
   - `Role` (StrEnum: INPUT/OUTPUT) — relationship between calculations and geometries/trajectories
-  - `CompressedArrayTypeDecorator` / `CompressedJSONTypeDecorator` — SQLAlchemy `TypeDecorator`s
-    storing NumPy arrays / JSON as zlib-compressed binary data (decompression is size-capped)
-  - `_fk_field()` — helper for building foreign-key fields with ON DELETE CASCADE
+  - `CompressedArrayTypeDecorator` — SQLAlchemy `TypeDecorator` storing NumPy arrays as
+    zlib-compressed `.npy` data (decompression is size-capped and rejects truncated streams)
 
 ### Docstrings
 

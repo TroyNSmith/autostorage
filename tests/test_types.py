@@ -17,6 +17,14 @@ def test_decompress_limit() -> None:
         _decompress(data, max_size=999)
 
 
+def test_decompress_truncated() -> None:
+    """A truncated compressed stream is refused."""
+    data = zlib.compress(b"0" * 1000)
+
+    with pytest.raises(ValueError, match="truncated"):
+        _decompress(data[:-4])
+
+
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_array_decorator_preserves_dtype(dtype: type[np.floating]) -> None:
     """With `dtype=None`, the input array's dtype is preserved."""

@@ -30,7 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`IdentityAlgorithmRow.name`** is unique, and `create_identity_algorithms()` updates the `kind`/parent of existing rows to match the registry.
 - **`Database.session()`** returns a `sqlmodel.Session` (`AutostorageSession`), so `session.exec(...)` is available. The engine URL is built with `sqlalchemy.URL.create`, so paths containing `?` or `#` work.
 - **Trajectory ndim check** is now a session-level `before_flush` listener (`verify_trajectory_geometry_ndim`), so an inferred `TrajectoryRow.ndim` is persisted.
-- Decompression of stored arrays/JSON is capped at `types.MAX_DECOMPRESSED_BYTES`.
+- Decompression of stored arrays is capped at `types.MAX_DECOMPRESSED_BYTES`, and truncated compressed streams are rejected with a `ValueError`.
+- **Dict JSON columns** (`ModelRow.keywords`, `CalculationRow.input_provenance`/`output_provenance`, `ValidationRow.extras`) now use `MutableDict`, so in-place edits (e.g. `calc.input_provenance["x"] = 1`) are persisted on commit.
+- **`Database.__init__`** disposes its engine if schema creation or registry seeding fails. The `PRAGMA foreign_keys=ON` hook is a module-level listener, and the no-op `from .models import *` was removed.
+- **Schema**: dropped the redundant `ix_step_stage_id1` index (`stage_id1` is the leading column of the `step` unique indexes).
+- Internal cleanup: all cascading foreign keys are declared with `models._fk_field()` (moved from `types.py`), and the `events` listeners use typed helpers instead of `Any`.
 
 ### Fixed
 
@@ -47,6 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`IdentityAlgorithmRow.deterministic`**: Removed along with `automol.Algorithm.deterministic` in automol 0.0.26.
 - Unused `algorithm_cache` columns on `IdentityRow` and `IdentityStationaryLink`.
 - `stereomolgraph` and `irmsd` dev dependencies (no longer used by automol).
+- **`types.CompressedJSONTypeDecorator`**: Unused by any model.
 
 ## [0.0.17] - 2026-09-19
 
