@@ -6,9 +6,9 @@ from autostorage import Database
 from autostorage.models import (
     CalculationGeometryLink,
     CalculationRow,
-    EnergyRow,
     GeometryRow,
     ModelRow,
+    PropertyValueRow,
     Role,
     StageRow,
     StageStationaryLink,
@@ -102,14 +102,23 @@ with db.session() as session:
     )
 
     # Energy results for each point (Hartree); the TS sits above both minima.
-    energy_reactant = EnergyRow(
-        geometry_id=reactant_geom.id, calculation_id=calc_reactant.id, value=-56.19513
+    energy_reactant = PropertyValueRow(
+        property_kind_name="energy",
+        geometry_id=reactant_geom.id,
+        calculation_id=calc_reactant.id,
+        value=-56.19513,
     )
-    energy_ts = EnergyRow(
-        geometry_id=ts_geom.id, calculation_id=calc_ts.id, value=-56.17021
+    energy_ts = PropertyValueRow(
+        property_kind_name="energy",
+        geometry_id=ts_geom.id,
+        calculation_id=calc_ts.id,
+        value=-56.17021,
     )
-    energy_product = EnergyRow(
-        geometry_id=product_geom.id, calculation_id=calc_product.id, value=-56.19513
+    energy_product = PropertyValueRow(
+        property_kind_name="energy",
+        geometry_id=product_geom.id,
+        calculation_id=calc_product.id,
+        value=-56.19513,
     )
     session.add_all([energy_reactant, energy_ts, energy_product])
 

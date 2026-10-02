@@ -26,7 +26,9 @@ and testing ([PyTest](https://docs.pytest.org/en/latest/))
 with code coverage reports [CodeCov](https://docs.codecov.com/docs).
 
 Docstrings follow the
-[NumPy docstring standard](https://numpydoc.readthedocs.io/en/latest/format.html#docstring-standard).
+[Google docstring style](https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings)
+(matching `automol`), validated by Ruff and rendered by Sphinx through Napoleon. Types come from
+annotations and are not repeated in `Args:`/`Returns:`.
 
 ## Naming Conventions
 

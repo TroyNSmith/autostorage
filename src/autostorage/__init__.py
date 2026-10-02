@@ -2,22 +2,21 @@
 
 __version__ = "0.0.17"
 
-from . import events, types
+from . import events, query, types
 from .database import Database
+from .events import AutostorageSession, IdentityGenerationWarning
 from .models import (
     CalculationGeometryLink,
     CalculationRow,
     CalculationTrajectoryLink,
-    EnergyRow,
     GeometryRow,
     GeometryTrajectoryLink,
-    GradientRow,
-    HessianRow,
     IdentityAlgorithmRow,
-    IdentityExtraRow,
     IdentityRow,
     IdentityStationaryLink,
     ModelRow,
+    PropertyKindRow,
+    PropertyValueRow,
     StageRow,
     StageStationaryLink,
     StationaryPointRow,
@@ -26,23 +25,34 @@ from .models import (
     TrajectoryRow,
     ValidationRow,
 )
+from .property import (
+    PropertyKind,
+    PropertyKindRegistry,
+    PropertyValidationProtocol,
+    energy_property_kind,
+    gradient_property_kind,
+    hessian_property_kind,
+)
 from .types import Role
 
 __all__ = [
+    "AutostorageSession",
     "CalculationGeometryLink",
     "CalculationRow",
     "CalculationTrajectoryLink",
     "Database",
-    "EnergyRow",
     "GeometryRow",
     "GeometryTrajectoryLink",
-    "GradientRow",
-    "HessianRow",
     "IdentityAlgorithmRow",
-    "IdentityExtraRow",
+    "IdentityGenerationWarning",
     "IdentityRow",
     "IdentityStationaryLink",
     "ModelRow",
+    "PropertyKind",
+    "PropertyKindRegistry",
+    "PropertyKindRow",
+    "PropertyValidationProtocol",
+    "PropertyValueRow",
     "Role",
     "StageRow",
     "StageStationaryLink",
@@ -51,6 +61,10 @@ __all__ = [
     "StepValidationLink",
     "TrajectoryRow",
     "ValidationRow",
+    "energy_property_kind",
     "events",
+    "gradient_property_kind",
+    "hessian_property_kind",
+    "query",
     "types",
 ]

@@ -1,6 +1,5 @@
 """Autostorage types."""
 
-import json
 import zlib
 from enum import StrEnum
 from io import BytesIO
@@ -9,20 +8,32 @@ from typing import Any
 import numpy as np
 from sqlalchemy import LargeBinary
 from sqlalchemy.types import TypeDecorator
-from sqlmodel import Field
 
-__all__ = ["CompressedArrayTypeDecorator", "CompressedJSONTypeDecorator", "Role"]
+__all__ = ["CompressedArrayTypeDecorator", "Role"]
+
+MAX_DECOMPRESSED_BYTES = 1 << 30
+"""Upper bound on the decompressed size of a stored blob (guards against zip bombs)."""
 
 
-def _fk_field(target: str, *, nullable: bool = False, index: bool = True) -> Any:  # noqa: ANN401
-    """Build a standard foreign-key Field with ON DELETE CASCADE."""
-    return Field(
-        default=None,
-        foreign_key=target,
-        ondelete="CASCADE",
-        nullable=nullable,
-        index=index,
-    )
+def _decompress(data: bytes, max_size: int = MAX_DECOMPRESSED_BYTES) -> bytes:
+    """Decompress zlib `data`, refusing to inflate beyond `max_size` bytes.
+
+    Raises:
+        ValueError: If the data would inflate beyond `max_size` bytes, or if the
+            compressed stream is truncated.
+    """
+    decompressor = zlib.decompressobj()
+    result = decompressor.decompress(data, max_size)
+    if decompressor.unconsumed_tail:
+        msg = f"Decompressed data exceeds the {max_size}-byte limit."
+        raise ValueError(msg)
+    if not decompressor.eof:
+        msg = (
+            "Compressed data is truncated, or decompresses beyond the "
+            f"{max_size}-byte limit."
+        )
+        raise ValueError(msg)
+    return result
 
 
 class CompressedArrayTypeDecorator(TypeDecorator):
@@ -35,7 +46,13 @@ class CompressedArrayTypeDecorator(TypeDecorator):
     impl = LargeBinary
     cache_ok = True
 
-    def __init__(self, dtype: Any = np.float64, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(
+        self,
+        dtype: Any = np.float64,  # noqa: ANN401
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> None:
+        """Create the decorator, storing arrays as `dtype` (or as given if None)."""
         super().__init__(*args, **kwargs)
         self.dtype = dtype
 
@@ -44,7 +61,8 @@ class CompressedArrayTypeDecorator(TypeDecorator):
         if value is None:
             return None
         buffer = BytesIO()
-        np.save(buffer, np.asarray(value, dtype=self.dtype), allow_pickle=False)
+        array = np.asarray(value, dtype=self.dtype)
+        np.save(buffer, array, allow_pickle=False)
         return zlib.compress(buffer.getvalue())
 
     def process_result_value(
@@ -55,32 +73,7 @@ class CompressedArrayTypeDecorator(TypeDecorator):
         """Convert compressed `.npy` bytes from the database back to a NumPy array."""
         if value is None:
             return None
-        return np.load(BytesIO(zlib.decompress(value)), allow_pickle=False)
-
-
-class CompressedJSONTypeDecorator(TypeDecorator):
-    """Stores a JSON dict as zlib-compressed binary data in the DB."""
-
-    impl = LargeBinary
-    cache_ok = True
-
-    def process_bind_param(self, value: Any, dialect: Any) -> bytes | None:  # noqa: ANN401, ARG002
-        """Convert a dict to zlib-compressed JSON bytes for the database."""
-        if value is None:
-            return None
-        json_bytes = json.dumps(value, sort_keys=True).encode("utf-8")
-        return zlib.compress(json_bytes)
-
-    def process_result_value(
-        self,
-        value: bytes | None,
-        dialect: Any,  # noqa: ANN401, ARG002
-    ) -> dict[str, Any] | None:
-        """Convert compressed JSON bytes from the database back to a dict."""
-        if value is None:
-            return None
-        json_bytes = zlib.decompress(value)
-        return json.loads(json_bytes.decode("utf-8"))
+        return np.load(BytesIO(_decompress(value)), allow_pickle=False)
 
 
 class Role(StrEnum):

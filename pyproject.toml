@@ -7,7 +7,7 @@ authors = [
 ]
 requires-python = ">= 3.12"
 dependencies = [
-    "automol==0.0.25",
+    "automol==0.0.26",
     "sqlmodel>=0.0.31",
 ]
 
@@ -41,7 +41,7 @@ ignore = [
 "examples/**.py" = ["S101", "T201", "INP001"]
 
 [tool.ruff.lint.pydocstyle]
-convention = "numpy"
+convention = "google"
 
 # Ty configurations
 [tool.ty.environment]
@@ -64,6 +64,7 @@ type = "layers"
 layers = [
     "autostorage.database",
     "autostorage.events",
+    "autostorage.query | autostorage.property",
     "autostorage.models",
     "autostorage.types",
 ]

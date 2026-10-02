@@ -6,10 +6,12 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from automol import AlgorithmRegistry
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlmodel import col
+from sqlmodel import col, select
 
+from autostorage import AutostorageSession, PropertyKindRegistry, events
 from autostorage.database import Database
 from autostorage.models import (
     CalculationGeometryLink,
@@ -17,6 +19,7 @@ from autostorage.models import (
     IdentityAlgorithmRow,
     IdentityRow,
     ModelRow,
+    PropertyKindRow,
 )
 
 
@@ -83,13 +86,35 @@ class TestDatabaseInit:
         assert database.engine is not None
         assert "sqlite" in str(database.engine.url)
 
+    def test_init_failure_closes_database(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The engine is disposed if registry seeding fails."""
+        closed: list[Database] = []
+        close = Database.close
+
+        def _fail(_session: Session) -> None:
+            msg = "seeding failed"
+            raise RuntimeError(msg)
+
+        def _close(db: Database) -> None:
+            closed.append(db)
+            close(db)
+
+        monkeypatch.setattr(events, "create_property_kinds", _fail)
+        monkeypatch.setattr(Database, "close", _close)
+        with pytest.raises(RuntimeError, match="seeding failed"):
+            Database(db_path)
+        assert len(closed) == 1
+
 
 class TestDatabaseSession:
     """Tests for Database.session() method."""
 
     def test_session_returns_session_instance(self, database: Database) -> None:
-        """session() returns a SQLAlchemy Session."""
+        """session() returns an `AutostorageSession` (a SQLAlchemy Session)."""
         sess = database.session()
+        assert isinstance(sess, AutostorageSession)
         assert isinstance(sess, Session)
         sess.close()
 
@@ -152,9 +177,11 @@ class TestDatabaseIntegration:
         """Can insert and query a row from the database."""
         with database.session() as session:
             # Algorithms are seeded on Database init from the automol registry
-            algorithm = (
-                session.query(IdentityAlgorithmRow).filter_by(name="rdkit inchi").one()
-            )
+            algorithm = session.exec(
+                select(IdentityAlgorithmRow).where(
+                    col(IdentityAlgorithmRow.name) == "rdkit_inchi"
+                )
+            ).one()
 
             # Create an identity row
             identity = IdentityRow(
@@ -165,12 +192,11 @@ class TestDatabaseIntegration:
             session.commit()
 
             # Query it back
-            result = (
-                session.query(IdentityRow)
+            result = session.exec(
+                select(IdentityRow)
                 .join(IdentityAlgorithmRow)
-                .filter(col(IdentityAlgorithmRow.kind) == "stereoisomer")
-                .first()
-            )
+                .where(col(IdentityAlgorithmRow.kind) == "stereoisomer")
+            ).first()
             assert result is not None
             assert result.value == "InChI=1S/CH4/h1H4"
 
@@ -194,7 +220,7 @@ class TestDatabaseIntegration:
             session.commit()
 
             # Retrieve and verify keys are consistent
-            result = session.query(CalculationRow).first()
+            result = session.exec(select(CalculationRow)).first()
             assert result is not None
             # The serializer should have sorted keys during storage
             assert result.input_provenance == provenance
@@ -221,3 +247,54 @@ class TestDatabaseIntegration:
             assert sess2.is_active
             # Both should access the same database
             assert sess1.get_bind() == sess2.get_bind()
+
+
+class TestRegistryTablesPrePopulated:
+    """Registry pre-population tests for database initialization."""
+
+    def test_identity_algorithms_populated(self, database: Database) -> None:
+        """`identity_algorithm` table populated from registry at initialization."""
+        with database.session() as sess:
+            for alg in AlgorithmRegistry.algorithms:
+                alg_row = sess.exec(
+                    select(IdentityAlgorithmRow).where(
+                        col(IdentityAlgorithmRow.name) == alg.name
+                    )
+                ).one()
+                assert alg_row.id
+                if alg.parent_algorithm is not None:
+                    parent = sess.get(IdentityAlgorithmRow, alg_row.parent_algorithm_id)
+                    assert parent is not None
+                    assert parent.name == alg.parent_algorithm.name
+                    assert parent.id
+
+    def test_property_kinds_populated(self, database: Database) -> None:
+        """`property_kind` table populated from registry at initialization."""
+        with database.session() as sess:
+            for kind in PropertyKindRegistry.property_kinds:
+                assert sess.get(PropertyKindRow, kind.name) is not None
+
+
+class TestDatabaseReopen:
+    """Tests for reopening an existing database file."""
+
+    def test_reopen_does_not_duplicate_registry_rows(self, db_path: Path) -> None:
+        """Reopening a database does not re-insert registry rows."""
+        for _ in range(3):
+            with Database(db_path) as db, db.session() as sess:
+                kinds = sess.exec(select(PropertyKindRow)).all()
+                algs = sess.exec(select(IdentityAlgorithmRow)).all()
+                assert len(kinds) == len(PropertyKindRegistry.property_kinds)
+                assert len(algs) == len(AlgorithmRegistry.algorithms)
+
+    def test_context_manager(self, db_path: Path) -> None:
+        """`Database` can be used as a context manager."""
+        with Database(db_path) as db:
+            assert isinstance(db, Database)
+
+    def test_path_with_url_characters(self, tmp_path: Path) -> None:
+        """Paths containing URL delimiters are not misparsed."""
+        path = tmp_path / "odd?name#1.db"
+        with Database(path):
+            pass
+        assert path.exists()

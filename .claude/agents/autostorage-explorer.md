@@ -13,26 +13,21 @@ report `file:line` references — not to design or write the implementation.
 ## Layout
 
 Flat module structure under `src/autostorage/`, layered (higher depends on lower, never reverse,
-enforced by import-linter): `utils` > `database` > `merge` > `events` > `models` > `types`/`exc`.
+enforced by import-linter): `database` > `events` > `query` | `property` > `models` > `types`.
 
-- `models.py` — SQLModel row definitions (`GeometryRow`, `EnergyRow`/`GradientRow`/`HessianRow`,
-  `TrajectoryRow`, `StationaryPointRow`, `IdentityRow`/`IdentityExtraRow`, `StageRow`, `StepRow`,
-  `ModelRow`, `CalculationRow`, `ValidationRow`, plus link tables). Base classes: `TimestampMixin`,
-  `BaseRow`, `BaseResultRow`, `BaseLink`. Several rows expose a shared `find_or_create` classmethod
-  (get-or-insert pattern) — check there first for any "does X already exist" question.
-- `events.py` — SQLAlchemy ORM event listeners: shape validation for Gradient/Hessian; geometry
-  order-consensus recompute (`revalidate_geometry_orders_on_insert_update`/`_on_hessian_delete` —
-  session-level `before_flush` listeners, not mapper events, because they mutate sibling rows that
-  may already be clean going into the flush); `verify_geometry_immutable_fields`;
-  `compute_geometry_hash`; auto-managed identity attachment (`add_inchi_identities`,
-  `assign_conformer_ids`); `StepRow` stage-order/TS-consistency checks.
+- `models.py` — SQLModel row definitions (`GeometryRow` (extends `automol.Geometry`),
+  `TrajectoryRow`, `ModelRow`, `CalculationRow`, `PropertyKindRow`/`PropertyValueRow`,
+  `ValidationRow`, `StationaryPointRow`, `StageRow`, `StepRow`,
+  `IdentityAlgorithmRow`/`IdentityRow`, plus link tables).
+- `property.py` — `PropertyKind` specs and `PropertyKindRegistry` (`energy`, `gradient`,
+  `hessian`).
+- `query.py` — select-statement factories (`stationary_point_by_identity`).
+- `events.py` — `AutostorageSession` plus ORM event listeners bound to it: registry seeding,
+  property value validation, validated-stationary-point Hessian check, trajectory ndim check,
+  automatic identity attachment (`add_registry_identities_before_flush`), and `StepRow`
+  stage-order/TS-consistency checks.
 - `database.py` — `Database`: SQLite engine/session manager.
-- `merge.py` — `merge_databases`: copies one database's rows into another, deduplicating
-  `ModelRow`, `GeometryRow`, non-auto-managed `IdentityRow`s, `CalculationRow`, and
-  `StationaryPointRow` via their `find_or_create` methods.
-- `types.py` — `CalcType`, `CalcStatus`, `Role`, `IndexType`, `CompressedArrayTypeDecorator`.
-- `exc.py` — `ResultShapeError`, `MissingPrimaryKeyError`.
-- `utils.py` — MESS input export and PES plotting.
+- `types.py` — `Role`, `CompressedArrayTypeDecorator`.
 
 ## Known gotchas (check these before assuming a bug is novel)
 
