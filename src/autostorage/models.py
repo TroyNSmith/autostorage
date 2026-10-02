@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, Self
 
+import py3Dmol
 from automol import Geometry, IdentityKind
 from automol.utils.types import CoordinatesField
 from sqlalchemy.ext.mutable import MutableDict
@@ -243,6 +244,84 @@ class TrajectoryRow(SQLModel, table=True):
     calculation_links: list["CalculationTrajectoryLink"] = Relationship(
         back_populates="trajectory"
     )
+
+    def geometries_along(
+        self, axis: int = 0, at: Sequence[int] | None = None
+    ) -> list[GeometryRow]:
+        """Get the geometries along one dimension, ordered by their index along it.
+
+        Args:
+            axis: Dimension to run along.
+            at: Indices of the other dimensions (in order, skipping `axis`) at which
+                to take the slice. Defaults to the lowest index of each.
+
+        Returns:
+            The geometries whose index matches `at` in every other dimension.
+
+        Raises:
+            ValueError: If the trajectory has no indexed geometries, or `axis` or
+                `at` do not fit its number of dimensions.
+        """
+        links = [link for link in self.geometry_links if link.index is not None]
+        if not links:
+            msg = f"Trajectory {self.id} has no indexed geometries"
+            raise ValueError(msg)
+
+        indices = [list(link.index or []) for link in links]
+        ndim = self.ndim if self.ndim is not None else len(indices[0])
+        if not 0 <= axis < ndim:
+            msg = f"Axis {axis} is out of range for a trajectory with ndim {ndim}"
+            raise ValueError(msg)
+
+        others = [dim for dim in range(ndim) if dim != axis]
+        if at is None:
+            at = [min(idx[dim] for idx in indices) for dim in others]
+        if len(at) != len(others):
+            msg = f"Expected {len(others)} indices for the other dimensions, got {at}"
+            raise ValueError(msg)
+
+        target = list(at)
+        matches = [
+            (idx[axis], link.geometry)
+            for idx, link in zip(indices, links, strict=True)
+            if [idx[dim] for dim in others] == target
+        ]
+        return [geo for _, geo in sorted(matches, key=lambda match: match[0])]
+
+    def view(
+        self,
+        axis: int = 0,
+        at: Sequence[int] | None = None,
+        *,
+        interval: int = 200,
+        view: py3Dmol.view | None = None,
+    ) -> py3Dmol.view:
+        """Animate the geometries along one dimension with py3Dmol.
+
+        Args:
+            axis: Dimension to animate along.
+            at: Indices of the other dimensions (in order, skipping `axis`) at which
+                to take the slice. Defaults to the lowest index of each.
+            interval: Time between frames, in milliseconds.
+            view: Existing view to add the animation to. If `None`, create one.
+
+        Returns:
+            The view containing the animation.
+
+        Raises:
+            ValueError: If no geometries lie along the requested slice.
+        """
+        geos = self.geometries_along(axis, at)
+        if not geos:
+            msg = f"No geometries along axis {axis} at {at} in trajectory {self.id}"
+            raise ValueError(msg)
+
+        view = py3Dmol.view(width=400, height=400) if view is None else view
+        view.addModelsAsFrames("\n".join(geo.xyz_block() for geo in geos), "xyz")
+        view.setStyle({"model": -1}, {"stick": {}, "sphere": {"scale": 0.3}})
+        view.animate({"loop": "backAndForth", "interval": interval})
+        view.zoomTo()
+        return view
 
 
 class ModelRow(SQLModel, table=True):

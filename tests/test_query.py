@@ -46,7 +46,7 @@ def database(tmp_path: Path) -> Generator[Database, None, None]:
         yield db
 
 
-@pytest.mark.parametrize("algorithm", [automol.rdkit_inchi, "rdkit inchi"])
+@pytest.mark.parametrize("algorithm", [automol.rdkit_inchi, "rdkit_inchi"])
 def test_stationary_point_by_identity(
     database: Database, algorithm: automol.Algorithm | str
 ) -> None:
@@ -64,7 +64,7 @@ def test_stationary_point_by_identity_row(database: Database) -> None:
     with database.session() as session:
         alg = session.exec(
             select(IdentityAlgorithmRow).where(
-                col(IdentityAlgorithmRow.name) == "rdkit inchi"
+                col(IdentityAlgorithmRow.name) == "rdkit_inchi"
             )
         ).one()
         stmt = query.stationary_point_by_identity(alg, WATER_INCHI)

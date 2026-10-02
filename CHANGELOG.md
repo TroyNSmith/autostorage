@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`AutostorageSession`**: `sqlmodel.Session` subclass returned by `Database.session()`. All session-level listeners are bound to it rather than to every SQLAlchemy `Session` in the process.
 - **`IdentityGenerationWarning`**: Issued when an identity algorithm fails for a geometry (e.g. metals, no valid Lewis structure, failed InChI) or returns an empty value; that identity is skipped instead of aborting the flush.
 - **`Database` context manager** (`with Database(path) as db: ...` closes it on exit).
+- **`TrajectoryRow.geometries_along(axis, at)` / `TrajectoryRow.view(axis, at)`**: Slice a (multi-dimensional) trajectory along one dimension, holding the other indices fixed at `at` (default: the lowest index of each), and animate the slice with py3Dmol.
 - Top-level exports for `PropertyKindRow`, `PropertyValueRow`, `PropertyKind`, `AutostorageSession`, and `IdentityGenerationWarning`.
 
 ### Changed

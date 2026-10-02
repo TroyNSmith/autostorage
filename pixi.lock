@@ -15,7 +15,7 @@ environments:
     - https://pypi.org/simple
     packages:
       linux-64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.26-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.27-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/brotli-1.2.0-hed03a55_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/brotli-bin-1.2.0-hb03c661_1.conda
@@ -189,7 +189,7 @@ environments:
     - https://pypi.org/simple
     packages:
       linux-64:
-      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.26-pyh4616a5c_0.conda
+      - conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.27-pyh4616a5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/astroid-3.3.11-py313h78bf25f_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/aws-c-auth-0.10.4-hb7a77c6_1.conda
@@ -492,9 +492,9 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f4/24/2a3e3df732393fed8b3ebf2ec078f05546de641fe1b667ee316ec1dcf3b7/webencodings-0.5.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/80/9a966abdb505c5042e14136d4fc6a0ce0a3896d77ca02ab87b288e5417db/xyzgraph-1.6.13-py3-none-any.whl
 packages:
-- conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.26-pyh4616a5c_0.conda
-  sha256: c2bf02dfef0564a36fd172b32473ad1a94b14a4e4e3f964b55a3962543dc18b8
-  md5: efb0fcfe83ebeba612cbbcbc045e1a45
+- conda: https://conda.anaconda.org/avcopan/noarch/automol-0.0.27-pyh4616a5c_0.conda
+  sha256: 8cc9ebf5453e2335e7b6ef0f7dfcdcc4854cfd492246f0728ec9c7040b3558ea
+  md5: 52a664fd7a0c56766d25111586af0062
   depends:
   - python >=3.12
   - python *
@@ -506,8 +506,8 @@ packages:
   - pyparsing >=3.3.2
   - rdkit >=2025
   - scipy >=1.13
-  size: 23375
-  timestamp: 1790822564088
+  size: 23383
+  timestamp: 1790950844383
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
   build_number: 20
   sha256: 1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9

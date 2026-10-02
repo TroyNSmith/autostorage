@@ -600,9 +600,9 @@ class TestAddInchiIdentity:
             session.flush()
 
             assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
-            identity = _identity_for_algorithm(stat_point, "rdkit inchi")
+            identity = _identity_for_algorithm(stat_point, "rdkit_inchi")
             assert identity.algorithm.kind == "stereoisomer"
-            assert identity.algorithm.name == "rdkit inchi"
+            assert identity.algorithm.name == "rdkit_inchi"
             assert identity.value.startswith("InChI=")
 
     def test_existing_inchi_identity_reused(
@@ -668,13 +668,13 @@ class TestAddInchiIdentity:
 
             assert len(stat1.identities) == EXPECTED_IDENTITY_COUNT_THREE
             assert len(stat2.identities) == EXPECTED_IDENTITY_COUNT_THREE
-            inchi1 = _identity_for_algorithm(stat1, "rdkit inchi")
-            inchi2 = _identity_for_algorithm(stat2, "rdkit inchi")
+            inchi1 = _identity_for_algorithm(stat1, "rdkit_inchi")
+            inchi2 = _identity_for_algorithm(stat2, "rdkit_inchi")
             assert inchi1.id == inchi2.id
             assert inchi1.value == inchi2.value
 
             # Both stationary points share the same 3 identities (InChI, SMILES,
-            # and Hill formula), so only 3 IdentityRows should exist in total.
+            # and hill_formula), so only 3 IdentityRows should exist in total.
             identity_count = len(session.exec(select(IdentityRow)).all())
             assert identity_count == EXPECTED_IDENTITY_COUNT_THREE
 
@@ -734,13 +734,13 @@ class TestAddInchiIdentity:
 
             assert len(stat1.identities) == EXPECTED_IDENTITY_COUNT_THREE
             assert len(stat2.identities) == EXPECTED_IDENTITY_COUNT_THREE
-            inchi1 = _identity_for_algorithm(stat1, "rdkit inchi")
-            inchi2 = _identity_for_algorithm(stat2, "rdkit inchi")
+            inchi1 = _identity_for_algorithm(stat1, "rdkit_inchi")
+            inchi2 = _identity_for_algorithm(stat2, "rdkit_inchi")
             assert inchi1.id != inchi2.id
             assert inchi1.value != inchi2.value
 
             # Each stationary point has its own set of 3 identities (InChI,
-            # SMILES, and Hill formula), none of which are shared.
+            # SMILES, and hill_formula), none of which are shared.
             identity_count = len(session.exec(select(IdentityRow)).all())
             assert identity_count == EXPECTED_IDENTITY_COUNT_SIX
 
@@ -782,9 +782,9 @@ class TestAddInchiIdentity:
 
             # Identity should be auto-populated despite using relationship objects
             assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
-            identity = _identity_for_algorithm(stat_point, "rdkit inchi")
+            identity = _identity_for_algorithm(stat_point, "rdkit_inchi")
             assert identity.algorithm.kind == "stereoisomer"
-            assert identity.algorithm.name == "rdkit inchi"
+            assert identity.algorithm.name == "rdkit_inchi"
             assert identity.value.startswith("InChI=")
 
 
@@ -830,9 +830,9 @@ class TestAddSmilesIdentity:
             session.add(stat_point)
             session.flush()
 
-            # Should have identities for InChI, SMILES, and Hill formula.
+            # Should have identities for InChI, SMILES, and hill_formula.
             assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
-            smiles_identity = _identity_for_algorithm(stat_point, "rdkit smiles")
+            smiles_identity = _identity_for_algorithm(stat_point, "rdkit_smiles")
             assert smiles_identity.value == "C"  # Methane SMILES
 
     def test_duplicate_smiles_not_created(
@@ -897,12 +897,12 @@ class TestAddSmilesIdentity:
             session.flush()
 
             # Both stationary points should share the same SMILES identity row.
-            smiles1 = _identity_for_algorithm(stat1, "rdkit smiles")
-            smiles2 = _identity_for_algorithm(stat2, "rdkit smiles")
+            smiles1 = _identity_for_algorithm(stat1, "rdkit_smiles")
+            smiles2 = _identity_for_algorithm(stat2, "rdkit_smiles")
             assert smiles1.id == smiles2.id
             assert smiles1.value == "C"
 
-            # Only 3 IdentityRows total (InChI, SMILES, Hill formula), shared
+            # Only 3 IdentityRows total (InChI, SMILES, hill_formula), shared
             # between both stationary points.
             identity_count = len(session.exec(select(IdentityRow)).all())
             assert identity_count == EXPECTED_IDENTITY_COUNT_THREE
@@ -963,8 +963,8 @@ class TestAddSmilesIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            smiles1 = _identity_for_algorithm(stat1, "rdkit smiles")
-            smiles2 = _identity_for_algorithm(stat2, "rdkit smiles")
+            smiles1 = _identity_for_algorithm(stat1, "rdkit_smiles")
+            smiles2 = _identity_for_algorithm(stat2, "rdkit_smiles")
             assert smiles1.id != smiles2.id
             assert smiles1.value == "C"
             # Ethane SMILES should be different from methane
@@ -972,12 +972,12 @@ class TestAddSmilesIdentity:
 
 
 class TestAddHillIdentity:
-    """Tests for the Hill formula identity attached by the identity listener."""
+    """Tests for the hill_formula identity attached by the identity listener."""
 
     def test_hill_identity_added_on_insert(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """Hill formula is automatically attached as an IdentityRow."""
+        """hill_formula is automatically attached as an IdentityRow."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1013,15 +1013,15 @@ class TestAddHillIdentity:
             session.add(stat_point)
             session.flush()
 
-            # Should have identities for InChI, SMILES, and Hill formula.
+            # Should have identities for InChI, SMILES, and hill_formula.
             assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT_THREE
-            hill_identity = _identity_for_algorithm(stat_point, "hill formula")
-            assert hill_identity.value == "CH4"  # Methane Hill formula
+            hill_identity = _identity_for_algorithm(stat_point, "hill_formula")
+            assert hill_identity.value == "CH4"  # Methane hill_formula
 
     def test_duplicate_hill_not_created(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """Duplicate Hill formulas are not created for the same geometry."""
+        """Duplicate hill_formulas are not created for the same geometry."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1079,13 +1079,13 @@ class TestAddHillIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            # Both stationary points should share the same Hill formula identity.
-            hill1 = _identity_for_algorithm(stat1, "hill formula")
-            hill2 = _identity_for_algorithm(stat2, "hill formula")
+            # Both stationary points should share the same hill_formula identity.
+            hill1 = _identity_for_algorithm(stat1, "hill_formula")
+            hill2 = _identity_for_algorithm(stat2, "hill_formula")
             assert hill1.id == hill2.id
             assert hill1.value == "CH4"
 
-            # Only 3 IdentityRows total (InChI, SMILES, Hill formula), shared
+            # Only 3 IdentityRows total (InChI, SMILES, hill_formula), shared
             # between both stationary points.
             identity_count = len(session.exec(select(IdentityRow)).all())
             assert identity_count == EXPECTED_IDENTITY_COUNT_THREE
@@ -1093,7 +1093,7 @@ class TestAddHillIdentity:
     def test_different_hill_for_different_geometries(
         self, database: Database, make_model_opt: Callable[[], ModelRow]
     ) -> None:
-        """Different geometries create different Hill formula identities."""
+        """Different geometries create different hill_formula identities."""
         with database.session() as session:
             model = make_model_opt()
             session.add(model)
@@ -1146,11 +1146,11 @@ class TestAddHillIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            hill1 = _identity_for_algorithm(stat1, "hill formula")
-            hill2 = _identity_for_algorithm(stat2, "hill formula")
+            hill1 = _identity_for_algorithm(stat1, "hill_formula")
+            hill2 = _identity_for_algorithm(stat2, "hill_formula")
             assert hill1.id != hill2.id
             assert hill1.value == "CH4"
-            # Ethane Hill formula should be different from methane
+            # Ethane hill_formula should be different from methane
             assert hill2.value != "CH4"
 
 
@@ -1328,7 +1328,7 @@ class TestIdentityGenerationFailures:
                 session.commit()
 
             assert [(i.algorithm.name, i.value) for i in stp.identities] == [
-                ("hill formula", "Cl2Fe")
+                ("hill_formula", "Cl2Fe")
             ]
 
     def test_empty_identity_value_skipped(self, database: Database) -> None:
@@ -1407,7 +1407,7 @@ class TestPersistedSiblingIdentities:
             session.commit()
 
             # Replace the canonical SMILES with an equivalent, non-canonical one
-            smiles = _identity_for_algorithm(stp1, "rdkit smiles")
+            smiles = _identity_for_algorithm(stp1, "rdkit_smiles")
             stp1.identities.remove(smiles)
             stp1.identities.append(
                 IdentityRow(algorithm_id=smiles.algorithm_id, value="[H]O[H]")
@@ -1418,4 +1418,4 @@ class TestPersistedSiblingIdentities:
             session.add(stp2)
             session.commit()
 
-            assert _identity_for_algorithm(stp2, "rdkit smiles").value == "[H]O[H]"
+            assert _identity_for_algorithm(stp2, "rdkit_smiles").value == "[H]O[H]"

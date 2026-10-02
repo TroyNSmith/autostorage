@@ -179,7 +179,7 @@ class TestDatabaseIntegration:
             # Algorithms are seeded on Database init from the automol registry
             algorithm = session.exec(
                 select(IdentityAlgorithmRow).where(
-                    col(IdentityAlgorithmRow.name) == "rdkit inchi"
+                    col(IdentityAlgorithmRow.name) == "rdkit_inchi"
                 )
             ).one()
 

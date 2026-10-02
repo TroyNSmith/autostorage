@@ -26,7 +26,7 @@ The fundamental entities representing molecular structures, calculations, and th
 | Model | Description |
 |-------|-------------|
 | `GeometryRow` | Molecular geometry with atomic symbols, coordinates, charge, and spin; extends `automol.Geometry` |
-| `TrajectoryRow` | Ordered sequence of geometries from a dynamic calculation |
+| `TrajectoryRow` | Ordered sequence of geometries from a dynamic calculation; `view(axis, at)` animates the geometries along one dimension |
 | `ModelRow` | Calculation model specification (program, method, basis set, keywords) |
 | `CalculationRow` | Quantum chemistry calculation with provenance metadata |
 | `PropertyKindRow` | A kind of property (`energy`, `gradient`, `hessian`, ...), mirroring `PropertyKindRegistry` by name |

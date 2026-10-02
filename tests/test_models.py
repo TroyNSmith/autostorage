@@ -230,6 +230,82 @@ class TestTrajectoryRow:
             assert traj.geometry_links == []
             assert traj.calculation_links == []
 
+    @staticmethod
+    def _grid_trajectory(shape: tuple[int, int]) -> TrajectoryRow:
+        """Build a 2D trajectory of H2 geometries, with bond length 1 + i + j/10."""
+        traj = TrajectoryRow()
+        # Add links in reverse so that ordering by index is actually exercised
+        for i in reversed(range(shape[0])):
+            for j in reversed(range(shape[1])):
+                geo = GeometryRow(
+                    symbols=["H", "H"],
+                    coordinates=[[0.0, 0.0, 0.0], [0.0, 0.0, 1 + i + j / 10]],
+                )
+                traj.geometry_links.append(
+                    GeometryTrajectoryLink(geometry=geo, index=[i, j])
+                )
+        return traj
+
+    @staticmethod
+    def _bond_lengths(geos: list[GeometryRow]) -> list[float]:
+        return [float(geo.coordinates[1, 2]) for geo in geos]
+
+    def test_geometries_along(self, database: Database) -> None:
+        """`geometries_along` slices one dimension in index order."""
+        with database.session() as session:
+            traj = self._grid_trajectory((3, 2))
+            session.add(traj)
+            session.commit()
+
+            assert self._bond_lengths(traj.geometries_along()) == pytest.approx(
+                [1.0, 2.0, 3.0]
+            )
+            assert self._bond_lengths(traj.geometries_along(0, [1])) == pytest.approx(
+                [1.1, 2.1, 3.1]
+            )
+            assert self._bond_lengths(traj.geometries_along(1, [2])) == pytest.approx(
+                [3.0, 3.1]
+            )
+            assert traj.geometries_along(0, [5]) == []
+
+    def test_geometries_along_infers_ndim(self) -> None:
+        """`geometries_along` works before `ndim` is inferred on flush."""
+        traj = self._grid_trajectory((2, 2))
+        assert traj.ndim is None
+        assert self._bond_lengths(traj.geometries_along(1)) == pytest.approx([1.0, 1.1])
+
+    @pytest.mark.parametrize(
+        ("axis", "at"), [(2, None), (-1, None), (0, [0, 0]), (0, [])]
+    )
+    def test_geometries_along_invalid(self, axis: int, at: list[int] | None) -> None:
+        """Out-of-range axes and mis-sized `at` indices are rejected."""
+        traj = self._grid_trajectory((2, 2))
+        with pytest.raises(ValueError, match=r"out of range|Expected"):
+            traj.geometries_along(axis, at)
+
+    def test_geometries_along_empty(self) -> None:
+        """A trajectory without indexed geometries cannot be sliced."""
+        with pytest.raises(ValueError, match="no indexed geometries"):
+            TrajectoryRow(ndim=1).geometries_along()
+
+    def test_view(self) -> None:
+        """`view` animates the geometries along one dimension."""
+        traj = self._grid_trajectory((3, 2))
+        view = traj.view(axis=0, at=[1], interval=100)
+        script = view.startjs + view.endjs
+        assert "addModelsAsFrames" in script
+        assert '"interval": 100' in script
+        assert script.count("Geometry(q=0, s=0)") == 3  # noqa: PLR2004
+        assert "1.10000000" in script
+        assert "3.10000000" in script
+        assert "1.00000000" not in script
+
+    def test_view_empty_slice(self) -> None:
+        """`view` rejects a slice with no geometries."""
+        traj = self._grid_trajectory((2, 2))
+        with pytest.raises(ValueError, match="No geometries"):
+            traj.view(axis=0, at=[5])
+
 
 class TestModelRow:
     """Tests for ModelRow model."""
@@ -647,7 +723,7 @@ class TestIdentityRow:
         with database.session() as session:
             algorithm = session.exec(
                 select(IdentityAlgorithmRow).where(
-                    col(IdentityAlgorithmRow.name) == "rdkit inchi"
+                    col(IdentityAlgorithmRow.name) == "rdkit_inchi"
                 )
             ).one()
             identity = IdentityRow(
@@ -659,7 +735,7 @@ class TestIdentityRow:
 
             assert identity.id is not None
             assert identity.algorithm.kind == "stereoisomer"
-            assert identity.algorithm.name == "rdkit inchi"
+            assert identity.algorithm.name == "rdkit_inchi"
             assert identity.value == "InChI=1S/CH4/h1H4"
 
     def test_identity_unique_constraint(self, database: Database) -> None:
@@ -667,7 +743,7 @@ class TestIdentityRow:
         with database.session() as session:
             algorithm = session.exec(
                 select(IdentityAlgorithmRow).where(
-                    col(IdentityAlgorithmRow.name) == "rdkit inchi"
+                    col(IdentityAlgorithmRow.name) == "rdkit_inchi"
                 )
             ).one()
             identity1 = IdentityRow(
@@ -692,7 +768,7 @@ class TestIdentityRow:
         with database.session() as session:
             algorithm = session.exec(
                 select(IdentityAlgorithmRow).where(
-                    col(IdentityAlgorithmRow.name) == "rdkit inchi"
+                    col(IdentityAlgorithmRow.name) == "rdkit_inchi"
                 )
             ).one()
             identity = IdentityRow(algorithm_id=algorithm.id, value="InChI=1S/CH4/h1H4")
@@ -852,7 +928,7 @@ class TestLinkModels:
             session.add(stat_pt)
             smiles_algorithm = session.exec(
                 select(IdentityAlgorithmRow).where(
-                    col(IdentityAlgorithmRow.name) == "rdkit smiles"
+                    col(IdentityAlgorithmRow.name) == "rdkit_smiles"
                 )
             ).one()
             identity = IdentityRow(algorithm_id=smiles_algorithm.id, value="C")
@@ -957,7 +1033,7 @@ class TestModelIntegration:
             session.add(stat_pt)
             smiles_algorithm = session.exec(
                 select(IdentityAlgorithmRow).where(
-                    col(IdentityAlgorithmRow.name) == "rdkit smiles"
+                    col(IdentityAlgorithmRow.name) == "rdkit_smiles"
                 )
             ).one()
             identity = IdentityRow(algorithm_id=smiles_algorithm.id, value="C")
