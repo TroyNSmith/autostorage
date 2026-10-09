@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-10-09
+
 ## [0.0.18] - 2026-10-02
 
 > **Breaking (no migrations):** databases created by earlier versions are not compatible —
