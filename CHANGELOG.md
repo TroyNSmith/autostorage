@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+## [0.0.22] - 2026-11-15
 ### Added
 - **`rdkit_inchi_conn`**: A built-in identity algorithm of kind `isomer`: the connectivity InChI, without stereo layers, from `autogeom.inchi(geo, stereo=False)`. Stereoisomers share one identity (e.g. cis- and trans-1,2-difluoroethene), which `rdkit_inchi` (kind `stereoisomer`) tells apart. Every new stationary point now gets four identities instead of three.
 - **`IdentityStationaryLink.identity_cache`**: a dict stored as zlib-compressed JSON (`CompressedJSONTypeDecorator`), for data that makes generating identities cheaper (e.g. graph isomorphisms). Setting a top-level key in place is saved. The cache is discarded when the stationary point's geometry changes, since its identities are regenerated.
