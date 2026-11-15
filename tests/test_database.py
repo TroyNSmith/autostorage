@@ -189,7 +189,7 @@ class TestDatabaseIntegration:
 
             # Create an identity row
             identity = IdentityRow(
-                algorithm_id=algorithm.id,
+                algorithm_name=algorithm.name,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity)
@@ -234,7 +234,7 @@ class TestDatabaseIntegration:
         with database.session() as session:
             # Try to create a link with non-existent geometry_id
             link = CalculationGeometryLink(
-                calculation_id=9999,  # Non-existent
+                calculation_id=uuid.uuid4(),  # Non-existent
                 geometry_id=uuid.uuid4(),  # Non-existent
                 role="input",
             )
@@ -265,12 +265,12 @@ class TestRegistryTablesPrePopulated:
                         col(IdentityAlgorithmRow.name) == alg.name
                     )
                 ).one()
-                assert alg_row.id
                 if alg.parent is not None:
-                    parent = sess.get(IdentityAlgorithmRow, alg_row.parent_algorithm_id)
+                    parent = sess.get(
+                        IdentityAlgorithmRow, alg_row.parent_algorithm_name
+                    )
                     assert parent is not None
                     assert parent.name == alg.parent.name
-                    assert parent.id
 
     def test_property_kinds_populated(self, database: Database) -> None:
         """`property_kind` table populated from registry at initialization."""
@@ -290,6 +290,16 @@ class TestDatabaseReopen:
                 algs = sess.exec(select(IdentityAlgorithmRow)).all()
                 assert len(kinds) == len(PropertyKindRegistry.property_kinds)
                 assert len(algs) == len(IdentityAlgorithmRegistry.algorithms)
+
+    def test_reopen_with_changed_units_raises(self, db_path: Path) -> None:
+        """Reopening a database whose stored units differ from the registry fails."""
+        with Database(db_path) as db, db.session() as sess:
+            row = sess.get(PropertyKindRow, "energy")
+            assert row is not None
+            row.units = "eV"
+            sess.commit()
+        with pytest.raises(ValueError, match="'energy' is stored in 'eV'"):
+            Database(db_path)
 
     def test_context_manager(self, db_path: Path) -> None:
         """`Database` can be used as a context manager."""

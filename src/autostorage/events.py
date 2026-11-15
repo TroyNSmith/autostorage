@@ -9,8 +9,8 @@ import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-import numpy as np
-from autogeom import GeometryConversionError
+import pint
+from autogeom import GeometryConversionError, ureg
 from sqlalchemy import event, inspect
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper, UOWTransaction, aliased
@@ -27,9 +27,11 @@ from .models import (
     PropertyValueRow,
     StationaryPointRow,
     StepRow,
+    TrajectoryAxisRow,
     TrajectoryRow,
 )
 from .property import PropertyKindRegistry, hessian_property_kind
+from .types import AxisKind
 
 
 class AutostorageSession(Session):
@@ -63,32 +65,34 @@ def _ordered_algorithms() -> Iterator[IdentityAlgorithm]:
 
 def create_identity_algorithms(session: Session) -> None:
     """Create or update a row for every registered identity algorithm."""
-    rows = {row.name: row for row in session.exec(select(IdentityAlgorithmRow))}
     for alg in _ordered_algorithms():
-        parent_id = None
-        if alg.parent is not None:
-            parent_id = rows[alg.parent.name].id
-
-        row = rows.get(alg.name)
+        parent_name = alg.parent.name if alg.parent is not None else None
+        row = session.get(IdentityAlgorithmRow, alg.name)
         if row is None:
-            row = IdentityAlgorithmRow(
-                name=alg.name, kind=alg.kind, parent_algorithm_id=parent_id
-            )
+            row = IdentityAlgorithmRow(name=alg.name, kind=alg.kind)
             session.add(row)
-        else:
-            row.kind = alg.kind
-            row.parent_algorithm_id = parent_id
-        # Flush so the primary key is available to child algorithms
-        session.flush()
-        rows[alg.name] = row
+        row.kind = alg.kind
+        row.parent_algorithm_name = parent_name
     session.commit()
 
 
 def create_property_kinds(session: Session) -> None:
-    """Create a row for every registered property kind that is missing one."""
+    """Create a row for every registered property kind that is missing one.
+
+    Raises:
+        ValueError: If a stored kind's units differ from the registered ones, since
+            its stored values would then be misread.
+    """
     for prop_kind in PropertyKindRegistry.property_kinds:
-        if session.get(PropertyKindRow, prop_kind.name) is None:
-            session.add(PropertyKindRow(name=prop_kind.name))
+        row = session.get(PropertyKindRow, prop_kind.name)
+        if row is None:
+            session.add(PropertyKindRow(name=prop_kind.name, units=prop_kind.units))
+        elif row.units != prop_kind.units:
+            msg = (
+                f"Property kind {prop_kind.name!r} is stored in {row.units!r}, but "
+                f"registered with units {prop_kind.units!r}."
+            )
+            raise ValueError(msg)
     session.commit()
 
 
@@ -164,7 +168,11 @@ def verify_property_values_before_flush(
     flush_context: UOWTransaction,  # noqa: ARG001
     instances: object,  # noqa: ARG001
 ) -> None:
-    """Validate property values against their kind and cast them to its dtype."""
+    """Convert property values to their kind's native units and dtype, and validate.
+
+    A `pint.Quantity` is converted to the kind's units; other values are assumed
+    to be in those units already.
+    """
     for obj in _pending(session, PropertyValueRow):
         name = _property_kind_name(obj)
         geo_row = _resolve_geometry(session, obj)
@@ -173,17 +181,17 @@ def verify_property_values_before_flush(
             continue
 
         prop_kind = PropertyKindRegistry.get(name)
+        where = (
+            f"Property {name!r} for GeometryRow {geo_row.id} and "
+            f"CalculationRow {obj.calculation_id}"
+        )
         try:
-            value = np.asarray(obj.value, dtype=prop_kind.dtype)
-        except (TypeError, ValueError):
-            # Raised for ragged/inhomogeneous or non-numeric values
-            value = None
-        if value is None or not prop_kind.validation_fn(value, geo_row):
-            msg = (
-                f"Property {name!r} for GeometryRow {geo_row.id} and "
-                f"CalculationRow {obj.calculation_id} does not match the "
-                "expected shape."
-            )
+            value = prop_kind.to_native(obj.value)
+        except ValueError as err:
+            msg = f"{where}: {err}"
+            raise ValueError(msg) from err
+        if not prop_kind.validation_fn(value, geo_row):
+            msg = f"{where} does not match the expected shape."
             raise ValueError(msg)
         obj.value = value
 
@@ -254,7 +262,7 @@ def verify_trajectory_geometry_ndim(
 
 
 def _resolve_trajectory(
-    session: Session, link: GeometryTrajectoryLink
+    session: Session, link: GeometryTrajectoryLink | TrajectoryAxisRow
 ) -> TrajectoryRow | None:
     """Return the trajectory of `link`, via its relationship or foreign key."""
     if link.trajectory is not None:
@@ -264,8 +272,119 @@ def _resolve_trajectory(
     return None
 
 
-type _IdentityKey = tuple[int, str]
-"""An identity's `(algorithm_id, value)`, unique among `IdentityRow`s."""
+def _check_axis(axis: TrajectoryAxisRow, traj: TrajectoryRow | None) -> None:
+    """Validate `axis` against its kind and trajectory, and default its units.
+
+    Raises:
+        ValueError: If the kind, keys, units, or axis number are invalid.
+    """
+    try:
+        kind = AxisKind(axis.kind)
+    except ValueError as err:
+        msg = f"Unknown axis kind {axis.kind!r}; expected one of {list(AxisKind)}"
+        raise ValueError(msg) from err
+    count = kind.key_count
+    if count is not None and len(axis.keys or []) != count:
+        msg = f"A {kind} axis needs {count} atom keys, got {axis.keys}"
+        raise ValueError(msg)
+    if axis.units is None:
+        axis.units = kind.default_units
+    try:
+        unit = ureg.Unit(axis.units)
+    except (pint.UndefinedUnitError, AttributeError, TypeError, ValueError) as err:
+        msg = f"Invalid units {axis.units!r} for axis {axis.axis}: {err}"
+        raise ValueError(msg) from err
+    if count is not None and not unit.is_compatible_with(kind.default_units):
+        msg = f"Units {axis.units!r} are not valid for a {kind} axis"
+        raise ValueError(msg)
+    if traj is not None and traj.ndim is not None and not 0 <= axis.axis < traj.ndim:
+        msg = f"Axis {axis.axis} is out of range for a trajectory with ndim {traj.ndim}"
+        raise ValueError(msg)
+
+
+def _fill_link_values(
+    session: Session,
+    link: GeometryTrajectoryLink,
+    traj: TrajectoryRow,
+    axes: dict[int, TrajectoryAxisRow],
+) -> None:
+    """Convert the given values of `link`, and measure the missing ones.
+
+    Raises:
+        ValueError: If the values don't match the trajectory's ndim, or a quantity
+            has incompatible units or belongs to a dimension without an axis.
+    """
+    if link.values is None and not axes:
+        return
+    if traj.ndim is None:
+        msg = "Geometry values require an index (trajectory ndim is unset)"
+        raise ValueError(msg)
+    values = [None] * traj.ndim if link.values is None else list(link.values)
+    if len(values) != traj.ndim:
+        msg = (
+            f"Geometry values length {len(values)} does not match "
+            f"trajectory ndim {traj.ndim}"
+        )
+        raise ValueError(msg)
+
+    geo_row = link.geometry
+    if geo_row is None and link.geometry_id is not None:
+        geo_row = session.get(GeometryRow, link.geometry_id)
+    for dim, value in enumerate(values):
+        axis = axes.get(dim)
+        if value is None:
+            if axis is not None and geo_row is not None:
+                values[dim] = axis.measure(geo_row)
+        elif axis is not None:
+            values[dim] = axis.convert(value)
+        elif isinstance(value, pint.Quantity):
+            msg = f"Value {value:~} has units, but axis {dim} has no TrajectoryAxisRow"
+            raise ValueError(msg)
+        else:
+            values[dim] = float(value)
+    link.values = values
+
+
+@event.listens_for(AutostorageSession, "before_flush")
+def fill_trajectory_axis_values(
+    session: Session,
+    flush_context: UOWTransaction,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
+) -> None:
+    """Validate trajectory axes, and fill in the values of their geometries.
+
+    Missing values of measurable axes (distances, angles, dihedrals) are measured
+    from each geometry, and `pint.Quantity` values are converted to the axis's
+    units. Adding an axis to a trajectory fills in the values of its existing
+    geometries. Registered after `verify_trajectory_geometry_ndim`, so that the
+    inferred ndim is available.
+    """
+    # Rows aren't hashable, so they are keyed by `id()`
+    axes_by_traj: dict[int, dict[int, TrajectoryAxisRow]] = {}
+
+    def _axes(traj: TrajectoryRow) -> dict[int, TrajectoryAxisRow]:
+        key = id(traj)
+        if key not in axes_by_traj:
+            axes_by_traj[key] = {axis.axis: axis for axis in traj.axes}
+        return axes_by_traj[key]
+
+    links = {id(link): link for link in _pending(session, GeometryTrajectoryLink)}
+    for axis in _pending(session, TrajectoryAxisRow):
+        traj = _resolve_trajectory(session, axis)
+        _check_axis(axis, traj)
+        if traj is not None:
+            # Include axes linked only by foreign key
+            _axes(traj)[axis.axis] = axis
+            links.update((id(link), link) for link in traj.geometry_links)
+
+    for link in links.values():
+        traj = _resolve_trajectory(session, link)
+        if traj is not None:
+            _fill_link_values(session, link, traj, _axes(traj))
+
+
+type _IdentityKey = tuple[str, str]
+"""An identity's `(algorithm_name, value)`, unique among `IdentityRow`s."""
 
 
 @dataclass
@@ -274,39 +393,38 @@ class _IdentityFlushContext:
 
     Autoflush is suppressed while "before_flush" handlers run, so identities
     created earlier in the same flush are not visible to queries. They are
-    cached here, keyed by algorithm id and value, so that repeated lookups reuse
-    the pending row instead of creating a duplicate that would collide with the
-    `(algorithm_id, value)` unique constraint.
+    cached here, keyed by algorithm name and value, so that repeated lookups
+    reuse the pending row instead of creating a duplicate that would collide with
+    the `(algorithm_name, value)` unique constraint.
     """
 
     session: Session
-    algorithm_ids: dict[str, int]
     algorithms: list[IdentityAlgorithm] = field(
         default_factory=lambda: list(_ordered_algorithms())
     )
     cache: dict[_IdentityKey, IdentityRow] = field(default_factory=dict)
     # Geometries of stationary points added in this flush, keyed by
-    # (parent identity key, algorithm id) and then by their identity value
-    pending_siblings: dict[tuple[_IdentityKey, int], dict[str, GeometryRow]] = field(
+    # (parent identity key, algorithm name) and then by their identity value
+    pending_siblings: dict[tuple[_IdentityKey, str], dict[str, GeometryRow]] = field(
         default_factory=dict
     )
 
 
 def _get_or_create_identity(
-    ctx: _IdentityFlushContext, algorithm_id: int, value: str
+    ctx: _IdentityFlushContext, algorithm_name: str, value: str
 ) -> IdentityRow:
     """Look up a pending or persisted identity, creating one if none exists."""
-    key = (algorithm_id, value)
+    key = (algorithm_name, value)
     ident = ctx.cache.get(key)
     if ident is None:
         ident = ctx.session.exec(
             select(IdentityRow).where(
-                col(IdentityRow.algorithm_id) == algorithm_id,
+                col(IdentityRow.algorithm_name) == algorithm_name,
                 col(IdentityRow.value) == value,
             )
         ).one_or_none()
     if ident is None:
-        ident = IdentityRow(algorithm_id=algorithm_id, value=value)
+        ident = IdentityRow(algorithm_name=algorithm_name, value=value)
         ctx.session.add(ident)
     ctx.cache[key] = ident
     return ident
@@ -315,18 +433,18 @@ def _get_or_create_identity(
 def _sibling_geometries(
     ctx: _IdentityFlushContext,
     obj: StationaryPointRow,
-    algorithm_id: int,
+    algorithm_name: str,
     parent_key: _IdentityKey,
 ) -> dict[str, GeometryRow]:
-    """Return sibling geometries keyed by their `algorithm_id` identity value.
+    """Return sibling geometries keyed by their `algorithm_name` identity value.
 
     Siblings are other stationary points sharing the parent identity
     `parent_key`, including ones added earlier in the same flush. One geometry
     is returned per identity value.
     """
-    siblings = dict(ctx.pending_siblings.get((parent_key, algorithm_id), {}))
+    siblings = dict(ctx.pending_siblings.get((parent_key, algorithm_name), {}))
     parent_ident = ctx.cache[parent_key]
-    if parent_ident.id is None:
+    if parent_ident in ctx.session.new:
         return siblings
 
     ident = aliased(IdentityRow)
@@ -342,7 +460,7 @@ def _sibling_geometries(
         )
         .join(GeometryRow, col(GeometryRow.id) == col(StationaryPointRow.geometry_id))
         .where(
-            col(ident.algorithm_id) == algorithm_id,
+            col(ident.algorithm_name) == algorithm_name,
             col(parent_link.identity_id) == parent_ident.id,
             col(StationaryPointRow.id) != obj.id,
         )
@@ -377,7 +495,8 @@ def _attach_identities(ctx: _IdentityFlushContext, obj: StationaryPointRow) -> N
     Algorithms with a parent (e.g. SMILES, with InChI as parent) are passed
     `other_geos`: one geometry per existing identity value among stationary
     points sharing the parent identity. If an algorithm fails, a warning is
-    issued and its identity is skipped.
+    issued and its identity is skipped. Algorithms marked `minima_only` are
+    skipped for saddle points (nonzero `order`).
     """
     geo_row = _resolve_geometry(ctx.session, obj)
     if geo_row is None:
@@ -386,34 +505,37 @@ def _attach_identities(ctx: _IdentityFlushContext, obj: StationaryPointRow) -> N
 
     keys: dict[str, _IdentityKey] = {}
     for algorithm in ctx.algorithms:
-        alg_id = ctx.algorithm_ids[algorithm.name]
+        if algorithm.minima_only and obj.order != 0:
+            continue
+        name = algorithm.name
         parent = algorithm.parent
         parent_key = keys.get(parent.name) if parent is not None else None
 
         other_geos = None
         if parent_key is not None:
-            other_geos = _sibling_geometries(ctx, obj, alg_id, parent_key)
+            other_geos = _sibling_geometries(ctx, obj, name, parent_key)
 
         value = _generate_identity(algorithm, geo_row, other_geos)
         if value is None:
             continue
 
-        ident = _get_or_create_identity(ctx, alg_id, value)
-        if ident not in obj.identities:
-            obj.identities.append(ident)
-        keys[algorithm.name] = (alg_id, value)
+        ident = _get_or_create_identity(ctx, name, value)
+        if all(link.identity is not ident for link in obj.identity_links):
+            obj.identity_links.append(IdentityStationaryLink(identity=ident))
+        keys[name] = (name, value)
         if parent_key is not None:
-            pending = ctx.pending_siblings.setdefault((parent_key, alg_id), {})
+            pending = ctx.pending_siblings.setdefault((parent_key, name), {})
             pending.setdefault(value, geo_row)
 
 
-def _geometry_changed(obj: StationaryPointRow) -> bool:
-    """Return whether the geometry of a persisted stationary point was changed."""
+def _identity_inputs_changed(obj: StationaryPointRow) -> bool:
+    """Return whether the geometry or order of a persisted stationary point changed."""
     state = inspect(obj)
     if state is None:
         return False
     return any(
-        state.attrs[name].history.has_changes() for name in ("geometry", "geometry_id")
+        state.attrs[name].history.has_changes()
+        for name in ("geometry", "geometry_id", "order")
     )
 
 
@@ -427,24 +549,19 @@ def add_registry_identities_before_flush(
 
     Generates and attaches an `IdentityRow` for every registered algorithm (e.g.
     InChI, SMILES, Hill formula). Identities of persisted stationary points are
-    regenerated if their geometry is reassigned.
+    regenerated if their geometry or order changes.
     """
     new = [obj for obj in session.new if isinstance(obj, StationaryPointRow)]
     changed = [
         obj
         for obj in session.dirty
-        if isinstance(obj, StationaryPointRow) and _geometry_changed(obj)
+        if isinstance(obj, StationaryPointRow) and _identity_inputs_changed(obj)
     ]
     if not new and not changed:
         return
 
-    algorithm_ids = {
-        row.name: row.id
-        for row in session.exec(select(IdentityAlgorithmRow))
-        if row.id is not None
-    }
-    ctx = _IdentityFlushContext(session=session, algorithm_ids=algorithm_ids)
+    ctx = _IdentityFlushContext(session=session)
     for obj in changed:
-        obj.identities.clear()
+        obj.identity_links.clear()
     for obj in new + changed:
         _attach_identities(ctx, obj)

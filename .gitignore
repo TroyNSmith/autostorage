@@ -35,3 +35,10 @@ _great_docs_build/
 .great-docs-build/
 .great-docs-cache/
 .great-docs/
+
+# Scratch
+.scratch/
+
+# Local build outputs and lockfiles
+docs/
+uv.lock

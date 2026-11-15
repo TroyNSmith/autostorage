@@ -1,15 +1,18 @@
 """Models module tests."""
 
+import json
 import tempfile
+import uuid
+import zlib
 from collections.abc import Generator
 from pathlib import Path
 
 import numpy as np
-import pint
 import pytest
+from autogeom import ureg
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import col, select
+from sqlmodel import Session, col, select, text
 
 from autostorage import (
     energy_property_kind,
@@ -33,10 +36,11 @@ from autostorage.models import (
     StationaryPointRow,
     StepRow,
     StepValidationLink,
+    TrajectoryAxisRow,
     TrajectoryRow,
     ValidationRow,
 )
-from autostorage.types import Role
+from autostorage.types import AxisKind, Role
 
 
 @pytest.fixture
@@ -157,14 +161,44 @@ class TestGeometryRow:
                 symbols=symbols, coordinates=np.zeros((len(symbols), 3)), spin=spin
             )
 
-    def test_pint_coordinates_converted(self) -> None:
-        """`pint` coordinates are converted to Angstrom."""
-        ureg = pint.UnitRegistry()
-        geo = GeometryRow(
-            symbols=["H", "H"],
-            coordinates=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]) * ureg.bohr,
-        )
+    @pytest.mark.parametrize(
+        ("coordinates", "z"),
+        [
+            ([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], 1.0),
+            (
+                ureg.Quantity(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]), "bohr"),
+                0.529177,
+            ),
+            (ureg.Quantity(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.1]]), "nm"), 1.0),
+        ],
+    )
+    def test_coordinates_stored_in_angstrom(
+        self, database: Database, coordinates: object, z: float
+    ) -> None:
+        """`pint` coordinates are converted to Angstrom; plain ones are kept as is."""
+        geo = GeometryRow(symbols=["H", "H"], coordinates=coordinates)
+        assert geo.coordinates[1, 2] == pytest.approx(z, rel=1e-5)
+        with database.session() as session:
+            session.add(geo)
+            session.commit()
+            session.expire_all()
+            assert geo.coordinates[1, 2] == pytest.approx(z, rel=1e-5)
+
+    def test_pint_coordinates_converted_on_assignment(self) -> None:
+        """Coordinates assigned as a `pint` quantity are converted to Angstrom."""
+        geo = GeometryRow(symbols=["H", "H"], coordinates=np.zeros((2, 3)))
+        bohr = ureg.Quantity(np.array([[0, 0, 0], [0, 0, 1.0]]), "bohr")
+        # The validator accepts quantities, though the field is typed as the result
+        geo.coordinates = bohr  # ty: ignore[invalid-assignment]
         assert geo.coordinates[1, 2] == pytest.approx(0.529177, rel=1e-5)
+
+    def test_pint_coordinates_incompatible_units(self) -> None:
+        """Coordinates without length units are rejected."""
+        with pytest.raises(ValidationError, match="length units"):
+            GeometryRow(
+                symbols=["H", "H"],
+                coordinates=ureg.Quantity(np.zeros((2, 3)), "hartree"),
+            )
 
     def test_relabel_atoms_creates_new_row(
         self, database: Database, water: GeometryRow
@@ -307,6 +341,205 @@ class TestTrajectoryRow:
             traj.view(axis=0, at=[5])
 
 
+def _hooh(phi: float) -> GeometryRow:
+    """HOOH with an H-O-O-H dihedral of `phi` degrees."""
+    th = np.radians(phi)
+    return GeometryRow(
+        symbols=["H", "O", "O", "H"],
+        coordinates=[[0, 0, 1], [0, 0, 0], [0, 1, 0], [np.sin(th), 1, np.cos(th)]],
+    )
+
+
+class TestTrajectoryAxisRow:
+    """Tests for TrajectoryAxisRow and the values of a trajectory's geometries."""
+
+    PHIS = (0.0, 60.0, 120.0, 180.0)
+
+    @classmethod
+    def _scan(cls, **axis_kwargs: object) -> TrajectoryRow:
+        """Build a dihedral scan of HOOH, with an axis describing dimension 0."""
+        traj = TrajectoryRow()
+        traj.axes.append(
+            TrajectoryAxisRow(
+                axis=0,
+                kind=AxisKind.DIHEDRAL,
+                keys=[0, 1, 2, 3],
+                **axis_kwargs,  # ty: ignore[invalid-argument-type]
+            )
+        )
+        for i, phi in reversed(list(enumerate(cls.PHIS))):
+            traj.geometry_links.append(
+                GeometryTrajectoryLink(geometry=_hooh(phi), index=[i])
+            )
+        return traj
+
+    def test_values_measured_on_flush(self, database: Database) -> None:
+        """Missing dihedral values are measured, in degrees by default."""
+        with database.session() as session:
+            traj = self._scan(label="H-O-O-H torsion")
+            session.add(traj)
+            session.commit()
+            session.expire_all()
+
+            assert traj.axes[0].units == "degree"
+            assert traj.axes[0].label == "H-O-O-H torsion"
+            assert traj.values_along() == pytest.approx(self.PHIS)
+            assert traj.values_along(units="radian") == pytest.approx(
+                np.radians(self.PHIS)
+            )
+
+    def test_values_in_axis_units(self, database: Database) -> None:
+        """Measured values are stored in the axis's units."""
+        with database.session() as session:
+            traj = self._scan(units="radian")
+            session.add(traj)
+            session.commit()
+            assert traj.values_along() == pytest.approx(np.radians(self.PHIS))
+
+    @pytest.mark.parametrize(
+        ("kind", "keys", "expected"),
+        [("distance", [1, 2], 1.0), ("angle", [0, 1, 2], 90.0)],
+    )
+    def test_measure(self, kind: str, keys: list[int], expected: float) -> None:
+        """Distances are measured in Angstrom and angles in degrees."""
+        axis = TrajectoryAxisRow(axis=0, kind=AxisKind(kind), keys=keys)
+        assert axis.measure(_hooh(90.0)) == pytest.approx(expected)
+
+    def test_other_axis_is_not_measured(self, database: Database) -> None:
+        """`OTHER` axes keep given values, converted, and leave missing ones None."""
+        with database.session() as session:
+            traj = TrajectoryRow()
+            traj.axes.append(
+                TrajectoryAxisRow(axis=0, kind=AxisKind.OTHER, units="bohr")
+            )
+            given = GeometryTrajectoryLink(
+                geometry=_hooh(0.0),
+                index=[0],
+                values=[ureg.Quantity(0.0529177, "nm")],  # ty: ignore[invalid-argument-type]
+            )
+            missing = GeometryTrajectoryLink(geometry=_hooh(60.0), index=[1])
+            traj.geometry_links.extend([given, missing])
+            session.add(traj)
+            session.commit()
+
+            assert given.values == pytest.approx([1.0], rel=1e-5)
+            assert missing.values == [None]
+            np.testing.assert_allclose(traj.values_along(), [1.0, np.nan], rtol=1e-5)
+
+    def test_given_values_kept_and_converted(self, database: Database) -> None:
+        """Given values are kept, and quantities converted to the axis's units."""
+        with database.session() as session:
+            traj = self._scan()
+            links = sorted(traj.geometry_links, key=lambda link: link.index or [])
+            links[0].values = [1.5]
+            links[1].values = [ureg.Quantity(np.pi / 2, "radian")]  # ty: ignore[invalid-assignment]
+            session.add(traj)
+            session.commit()
+
+            assert traj.values_along() == pytest.approx([1.5, 90.0, 120.0, 180.0])
+
+    def test_axis_added_later_fills_values(self, database: Database) -> None:
+        """Adding an axis to a stored trajectory fills its geometries' values."""
+        with database.session() as session:
+            traj = self._scan()
+            traj.axes.clear()
+            session.add(traj)
+            session.commit()
+            assert all(link.values is None for link in traj.geometry_links)
+
+            session.add(
+                TrajectoryAxisRow(
+                    trajectory_id=traj.id, axis=0, kind="dihedral", keys=[0, 1, 2, 3]
+                )
+            )
+            session.commit()
+            session.expire_all()
+            assert traj.values_along() == pytest.approx(self.PHIS)
+
+    def test_values_without_axes(self, database: Database) -> None:
+        """Plain values are accepted on dimensions without an axis."""
+        with database.session() as session:
+            traj = TrajectoryRow()
+            link = GeometryTrajectoryLink(geometry=_hooh(0), index=[0], values=[2])
+            traj.geometry_links.append(link)
+            session.add(traj)
+            session.commit()
+            assert link.values == [2.0]
+            with pytest.raises(ValueError, match="no TrajectoryAxisRow"):
+                traj.values_along(units="degree")
+
+    @pytest.mark.parametrize(
+        ("axis_kwargs", "values", "match"),
+        [
+            ({"keys": [0, 1, 2]}, None, "needs 4 atom keys"),
+            ({"units": "furlongs_per_banana"}, None, "Invalid units"),
+            ({"units": "angstrom"}, None, "not valid for a dihedral"),
+            ({"axis": 1}, None, "out of range"),
+            ({"kind": "torsion"}, None, "Unknown axis kind"),
+            ({}, [1.0, 2.0], "does not match trajectory ndim"),
+            ({}, [ureg.Quantity(1.0, "hartree")], "Expected units compatible"),
+        ],
+    )
+    def test_invalid(
+        self,
+        database: Database,
+        axis_kwargs: dict[str, object],
+        values: list[object] | None,
+        match: str,
+    ) -> None:
+        """Invalid axes and values are rejected on flush."""
+        traj = TrajectoryRow()
+        traj.axes.append(
+            TrajectoryAxisRow(
+                **{"axis": 0, "kind": "dihedral", "keys": [0, 1, 2, 3], **axis_kwargs}  # ty: ignore[invalid-argument-type]
+            )
+        )
+        traj.geometry_links.append(
+            GeometryTrajectoryLink(geometry=_hooh(0), index=[0], values=values)  # ty: ignore[invalid-argument-type]
+        )
+        with database.session() as session:
+            session.add(traj)
+            with pytest.raises(ValueError, match=match):
+                session.commit()
+
+    @pytest.mark.parametrize(
+        ("values", "match"),
+        [
+            ([ureg.Quantity(1.0, "degree")], "has no TrajectoryAxisRow"),
+            ([1.0], "require an index"),
+        ],
+    )
+    def test_invalid_values_without_axis(
+        self, database: Database, values: list[object], match: str
+    ) -> None:
+        """Quantities need an axis, and values need an index."""
+        traj = TrajectoryRow()
+        index = None if match == "require an index" else [0]
+        traj.geometry_links.append(
+            GeometryTrajectoryLink(geometry=_hooh(0), index=index, values=values)  # ty: ignore[invalid-argument-type]
+        )
+        with database.session() as session:
+            session.add(traj)
+            with pytest.raises(ValueError, match=match):
+                session.commit()
+
+    def test_values_along_incompatible_units(self) -> None:
+        """`values_along` rejects units incompatible with the axis."""
+        traj = self._scan(units="degree")
+        with pytest.raises(ValueError, match="Cannot convert"):
+            traj.values_along(units="bohr")
+
+    def test_axes_deleted_with_trajectory(self, database: Database) -> None:
+        """Deleting a trajectory deletes its axes."""
+        with database.session() as session:
+            traj = self._scan()
+            session.add(traj)
+            session.commit()
+            session.delete(traj)
+            session.commit()
+            assert session.exec(select(TrajectoryAxisRow)).all() == []
+
+
 class TestModelRow:
     """Tests for ModelRow model."""
 
@@ -402,7 +635,7 @@ class TestCalculationRow:
     def test_calculation_requires_model(self, database: Database) -> None:
         """CalculationRow requires a valid model_id."""
         with database.session() as session:
-            calc = CalculationRow(model_id=9999, calc_type="energy")
+            calc = CalculationRow(model_id=uuid.uuid4(), calc_type="energy")
             session.add(calc)
 
             with pytest.raises(IntegrityError):
@@ -561,7 +794,7 @@ class TestStationaryPointRow:
             assert stp.geometry_id == water.id
             assert stp.calculation_id == calculation.id
 
-            assert len(stp.identities) >= 1  # Auto-populated
+            assert len(stp.identity_links) >= 1  # Auto-populated
 
     def test_create_transition_state(
         self,
@@ -640,8 +873,9 @@ class TestStepRow:
     def test_create_step_with_ts(self, database: Database) -> None:
         """StepRow can be created with a transition state."""
         with database.session() as session:
-            stage1 = StageRow(is_ts=False)
-            stage2 = StageRow(is_ts=False)
+            stage1, stage2 = sorted(
+                [StageRow(is_ts=False), StageRow(is_ts=False)], key=lambda s: str(s.id)
+            )
             stage_ts = StageRow(is_ts=True)
             session.add_all([stage1, stage2, stage_ts])
             session.flush()
@@ -692,8 +926,9 @@ class TestStepRow:
     def test_step_stage_relationships(self, database: Database) -> None:
         """StepRow stage relationships work correctly."""
         with database.session() as session:
-            stage1 = StageRow(is_ts=False)
-            stage2 = StageRow(is_ts=False)
+            stage1, stage2 = sorted(
+                [StageRow(is_ts=False), StageRow(is_ts=False)], key=lambda s: str(s.id)
+            )
             stage_ts = StageRow(is_ts=True)
             session.add_all([stage1, stage2, stage_ts])
             session.flush()
@@ -727,7 +962,7 @@ class TestIdentityRow:
                 )
             ).one()
             identity = IdentityRow(
-                algorithm_id=algorithm.id,
+                algorithm_name=algorithm.name,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity)
@@ -747,7 +982,7 @@ class TestIdentityRow:
                 )
             ).one()
             identity1 = IdentityRow(
-                algorithm_id=algorithm.id,
+                algorithm_name=algorithm.name,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity1)
@@ -755,7 +990,7 @@ class TestIdentityRow:
 
             # Try to create duplicate identity
             identity2 = IdentityRow(
-                algorithm_id=algorithm.id,
+                algorithm_name=algorithm.name,
                 value="InChI=1S/CH4/h1H4",
             )
             session.add(identity2)
@@ -771,15 +1006,104 @@ class TestIdentityRow:
                     col(IdentityAlgorithmRow.name) == "rdkit_inchi"
                 )
             ).one()
-            identity = IdentityRow(algorithm_id=algorithm.id, value="InChI=1S/CH4/h1H4")
+            identity = IdentityRow(
+                algorithm_name=algorithm.name, value="InChI=1S/CH4/h1H4"
+            )
             session.add(identity)
             session.commit()
 
-            assert identity.stationary_points == []
+            assert identity.stationary_links == []
 
 
 class TestLinkModels:
     """Tests for link/association table models."""
+
+    @pytest.mark.parametrize("deleted", ["geometry", "calculation", "model"])
+    def test_delete_row_deletes_its_data(
+        self, database: Database, calculation: CalculationRow, deleted: str
+    ) -> None:
+        """Deleting a geometry, calculation, or model deletes the data that needs it.
+
+        Properties, stationary points (with their identity and stage links), and
+        validations go; geometries, stages, steps, and identities are kept.
+        """
+        with database.session() as session:
+            geo = GeometryRow(symbols=["H", "H"], coordinates=[[0, 0, 0], [0, 0, 0.74]])
+            stage1, stage2 = StageRow(), StageRow()
+            point = StationaryPointRow(
+                geometry=geo, calculation=calculation, stages=[stage1]
+            )
+            step = StepRow(stage1=stage1, stage2=stage2, is_barrierless=True)
+            step.validations.append(
+                ValidationRow(calculation=calculation, method="irc")
+            )
+            energy = PropertyValueRow(
+                geometry=geo,
+                calculation=calculation,
+                property_kind_name=energy_property_kind.name,
+                value=-1.0,
+            )
+            session.add_all([point, step, energy])
+            session.commit()
+            assert session.exec(select(IdentityStationaryLink)).all()
+
+            rows = {
+                "geometry": geo,
+                "calculation": calculation,
+                "model": calculation.model,
+            }
+            session.delete(rows[deleted])
+            session.commit()
+
+            point_data = [
+                PropertyValueRow,
+                StationaryPointRow,
+                IdentityStationaryLink,
+                StageStationaryLink,
+            ]
+            calculation_data = [*point_data, ValidationRow, StepValidationLink]
+            gone, kept = {
+                "geometry": (point_data, [CalculationRow, ValidationRow]),
+                "calculation": ([*calculation_data, CalculationRow], [GeometryRow]),
+                "model": ([*calculation_data, CalculationRow, ModelRow], [GeometryRow]),
+            }[deleted]
+            for row_cls in gone:
+                assert session.exec(select(row_cls)).all() == [], row_cls
+            for row_cls in [*kept, StageRow, StepRow, IdentityRow]:
+                assert session.exec(select(row_cls)).all(), row_cls
+
+    @pytest.mark.parametrize("deleted", ["geometry", "trajectory", "calculation"])
+    def test_delete_row_deletes_its_links(
+        self, database: Database, calculation: CalculationRow, deleted: str
+    ) -> None:
+        """Deleting a row deletes its link rows, but not the rows they link to."""
+        with database.session() as session:
+            geo = GeometryRow(symbols=["H", "H"], coordinates=[[0, 0, 0], [0, 0, 0.74]])
+            traj = TrajectoryRow()
+            traj.geometry_links.append(GeometryTrajectoryLink(geometry=geo, index=[0]))
+            calculation.geometry_links.append(
+                CalculationGeometryLink(geometry=geo, role=Role.INPUT)
+            )
+            calculation.trajectory_links.append(
+                CalculationTrajectoryLink(trajectory=traj, role=Role.OUTPUT)
+            )
+            rows = {"geometry": geo, "trajectory": traj, "calculation": calculation}
+            session.add_all(rows.values())
+            session.commit()
+
+            session.delete(rows[deleted])
+            session.commit()
+
+            links = {
+                "geometry": [GeometryTrajectoryLink, CalculationGeometryLink],
+                "trajectory": [GeometryTrajectoryLink, CalculationTrajectoryLink],
+                "calculation": [CalculationGeometryLink, CalculationTrajectoryLink],
+            }
+            for link_cls in links[deleted]:
+                assert session.exec(select(link_cls)).all() == []
+            for name, row in rows.items():
+                if name != deleted:
+                    assert session.get(type(row), row.id) is not None
 
     def test_calculation_geometry_link(self, database: Database) -> None:
         """CalculationGeometryLink can be created with role."""
@@ -931,7 +1255,7 @@ class TestLinkModels:
                     col(IdentityAlgorithmRow.name) == "rdkit_smiles"
                 )
             ).one()
-            identity = IdentityRow(algorithm_id=smiles_algorithm.id, value="C")
+            identity = IdentityRow(algorithm_name=smiles_algorithm.name, value="C")
             session.add(identity)
             session.flush()
 
@@ -945,6 +1269,69 @@ class TestLinkModels:
 
             assert link.stationary_id == stat_pt.id
             assert link.identity_id == identity.id
+            assert link.identity_cache is None
+
+    @pytest.fixture
+    def identity_link(
+        self, database: Database, calculation: CalculationRow, water: GeometryRow
+    ) -> Generator[tuple[Session, IdentityStationaryLink]]:
+        """An auto-generated identity link of a committed stationary point."""
+        with database.session() as session:
+            stp = StationaryPointRow(geometry=water, calculation=calculation)
+            session.add(stp)
+            session.commit()
+            yield session, stp.identity_links[0]
+
+    def test_identity_cache_round_trip(
+        self, identity_link: tuple[Session, IdentityStationaryLink]
+    ) -> None:
+        """`identity_cache` is stored compressed and read back as a dict."""
+        session, link = identity_link
+        cache = {"graph": [[0, 1], [0, 2]], "hash": "abc"}
+        link.identity_cache = cache
+        session.commit()
+        session.expire_all()
+
+        assert link.identity_cache == cache
+        assert link.identity_id is not None
+        raw = (
+            session.connection()
+            .execute(
+                text(
+                    "SELECT identity_cache FROM identity_stationary_link "
+                    "WHERE identity_id = :id"
+                ).bindparams(id=link.identity_id.hex)
+            )
+            .one()[0]
+        )
+        assert json.loads(zlib.decompress(raw)) == cache
+
+    def test_identity_cache_in_place_change_persists(
+        self, identity_link: tuple[Session, IdentityStationaryLink]
+    ) -> None:
+        """Setting a key of `identity_cache` in place is saved."""
+        session, link = identity_link
+        link.identity_cache = {"a": 1}
+        session.commit()
+        assert link.identity_cache is not None
+        link.identity_cache["b"] = 2
+        session.commit()
+        session.expire_all()
+
+        assert link.identity_cache == {"a": 1, "b": 2}
+
+    def test_removing_identity_link_deletes_it(
+        self, identity_link: tuple[Session, IdentityStationaryLink]
+    ) -> None:
+        """A link removed from its stationary point's links is deleted."""
+        session, link = identity_link
+        link.stationary.identity_links.remove(link)
+        session.commit()
+
+        assert (
+            session.get(IdentityStationaryLink, (link.stationary_id, link.identity_id))
+            is None
+        )
 
 
 class TestModelIntegration:
@@ -1036,7 +1423,7 @@ class TestModelIntegration:
                     col(IdentityAlgorithmRow.name) == "rdkit_smiles"
                 )
             ).one()
-            identity = IdentityRow(algorithm_id=smiles_algorithm.id, value="C")
+            identity = IdentityRow(algorithm_name=smiles_algorithm.name, value="C")
             session.add(identity)
             session.flush()
 
@@ -1051,7 +1438,8 @@ class TestModelIntegration:
             # Test bidirectional relationship
             # Note: stat_pt will have auto-generated identities from event listener
             # plus the manually linked one
-            assert len(stat_pt.identities) >= 2
-            assert identity.id in [i.id for i in stat_pt.identities]
-            assert len(identity.stationary_points) == 1
-            assert identity.stationary_points[0].id == stat_pt.id
+            assert len(stat_pt.identity_links) >= 2
+            assert link in stat_pt.identity_links
+            assert identity.stationary_links == [link]
+            assert link.stationary is stat_pt
+            assert link.identity is identity

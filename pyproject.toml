@@ -10,6 +10,7 @@ authors = [
 ]
 dependencies = [
     "autogeom>=0.0.2",
+    "pint>=0.24",
     "sqlmodel>=0.0.31",
 ]
 requires-python = ">= 3.13"
@@ -45,7 +46,7 @@ convention = "google"
 
 # Ty configurations
 [tool.ty.environment]
-python = ".pixi/envs/test/bin/python"
+python = ".pixi/envs/dev/bin/python"
 
 [tool.ty.src]
 include = [

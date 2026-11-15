@@ -4,8 +4,11 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, Self
 
+import numpy as np
+import numpy.typing as npt
+import pint
 import py3Dmol
-from autogeom import Geometry
+from autogeom import Geometry, angle, dihedral, distance, ureg
 from autogeom.types import CoordinatesField
 from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import (
@@ -22,7 +25,13 @@ from sqlmodel import (
 )
 from sqlmodel.main import SQLModelConfig
 
-from .types import CompressedArrayTypeDecorator, IdentityKind, Role
+from .types import (
+    AxisKind,
+    CompressedArrayTypeDecorator,
+    CompressedJSONTypeDecorator,
+    IdentityKind,
+    Role,
+)
 
 
 def _fk_field(
@@ -72,7 +81,7 @@ class CalculationGeometryLink(SQLModel, table=True):
 
     geometry_id: uuid.UUID | None = _link_fk_field("geometry.id")
     """Foreign key to the linked `GeometryRow`."""
-    calculation_id: int | None = _link_fk_field("calculation.id")
+    calculation_id: uuid.UUID | None = _link_fk_field("calculation.id")
     """Foreign key to the linked `CalculationRow`."""
     role: Role = Field(sa_column=_role_column())
     """Role the `GeometryRow` plays for `CalculationRow` (input/output)."""
@@ -92,10 +101,17 @@ class GeometryTrajectoryLink(SQLModel, table=True):
 
     geometry_id: uuid.UUID | None = _link_fk_field("geometry.id")
     """Foreign key to the linked `GeometryRow`."""
-    trajectory_id: int | None = _link_fk_field("trajectory.id")
+    trajectory_id: uuid.UUID | None = _link_fk_field("trajectory.id")
     """Foreign key to the linked `TrajectoryRow`."""
     index: list[int] | None = Field(default=None, sa_column=Column(JSON))
     """Position of `geometry` within the `trajectory`."""
+    values: list[float | None] | None = Field(default=None, sa_column=Column(JSON))
+    """Physical value along each dimension (e.g. a scanned dihedral), aligned with
+    `index` and in the units of the matching `TrajectoryAxisRow`.
+
+    On flush, missing values of measurable axes are measured from `geometry`, and
+    `pint.Quantity` values are converted to the axis's units.
+    """
     geometry: "GeometryRow" = Relationship(back_populates="trajectory_links")
     """The linked `GeometryRow`."""
     trajectory: "TrajectoryRow" = Relationship(back_populates="geometry_links")
@@ -110,9 +126,9 @@ class CalculationTrajectoryLink(SQLModel, table=True):
         Index("ix_calculation_trajectory_link_calculation_id", "calculation_id"),
     )
 
-    trajectory_id: int | None = _link_fk_field("trajectory.id")
+    trajectory_id: uuid.UUID | None = _link_fk_field("trajectory.id")
     """Foreign key to the linked `TrajectoryRow`."""
-    calculation_id: int | None = _link_fk_field("calculation.id")
+    calculation_id: uuid.UUID | None = _link_fk_field("calculation.id")
     """Foreign key to the linked `CalculationRow`."""
     role: Role = Field(sa_column=_role_column())
     """Role the `TrajectoryRow` plays for `CalculationRow` (input/output)."""
@@ -132,9 +148,9 @@ class StageStationaryLink(SQLModel, table=True):
     __tablename__ = "stage_stationary_link"
     __table_args__ = (Index("ix_stage_stationary_link_stage_id", "stage_id"),)
 
-    stationary_id: int | None = _link_fk_field("stationary_point.id")
+    stationary_id: uuid.UUID | None = _link_fk_field("stationary_point.id")
     """Foreign key to the linked `StationaryPointRow`."""
-    stage_id: int | None = _link_fk_field("stage.id")
+    stage_id: uuid.UUID | None = _link_fk_field("stage.id")
     """Foreign key to the linked `StageRow`."""
 
 
@@ -148,26 +164,40 @@ class StepValidationLink(SQLModel, table=True):
     __tablename__ = "step_validation_link"
     __table_args__ = (Index("ix_step_validation_link_validation_id", "validation_id"),)
 
-    step_id: int | None = _link_fk_field("step.id")
+    step_id: uuid.UUID | None = _link_fk_field("step.id")
     """Foreign key to the linked `StepRow`."""
-    validation_id: int | None = _link_fk_field("validation.id")
+    validation_id: uuid.UUID | None = _link_fk_field("validation.id")
     """Foreign key to the linked `ValidationRow`."""
 
 
 class IdentityStationaryLink(SQLModel, table=True):
     """Association table linking chemical identities to stationary points.
 
-    Relationships are managed via `StationaryPointRow.identities` and
-    `IdentityRow.stationary_points`, using this table as their `link_model`.
+    Removing a link from `StationaryPointRow.identity_links` or
+    `IdentityRow.stationary_links` deletes it.
     """
 
     __tablename__ = "identity_stationary_link"
     __table_args__ = (Index("ix_identity_stationary_link_identity_id", "identity_id"),)
 
-    stationary_id: int | None = _link_fk_field("stationary_point.id")
+    stationary_id: uuid.UUID | None = _link_fk_field("stationary_point.id")
     """Foreign key to the linked `StationaryPointRow`."""
-    identity_id: int | None = _link_fk_field("identity.id")
+    identity_id: uuid.UUID | None = _link_fk_field("identity.id")
     """Foreign key to the linked `IdentityRow`."""
+    identity_cache: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(MutableDict.as_mutable(CompressedJSONTypeDecorator())),
+    )
+    """Data that makes generating identities cheaper (e.g. graph isomorphisms).
+
+    Stored as zlib-compressed JSON. Only top-level key changes are tracked in
+    place; reassign the dict after editing nested values. Discarded with the
+    link when the stationary point's geometry changes.
+    """
+    stationary: "StationaryPointRow" = Relationship(back_populates="identity_links")
+    """The linked `StationaryPointRow`."""
+    identity: "IdentityRow" = Relationship(back_populates="stationary_links")
+    """The linked `IdentityRow`."""
 
 
 # 1. Existential data rows
@@ -199,15 +229,17 @@ class GeometryRow(SQLModel, Geometry, table=True):
     charge: int = 0
     spin: int = 0
 
-    properties: list["PropertyValueRow"] = Relationship(back_populates="geometry")
+    properties: list["PropertyValueRow"] = Relationship(
+        back_populates="geometry", cascade_delete=True
+    )
     stationary_points: list["StationaryPointRow"] = Relationship(
-        back_populates="geometry"
+        back_populates="geometry", cascade_delete=True
     )
     trajectory_links: list["GeometryTrajectoryLink"] = Relationship(
-        back_populates="geometry"
+        back_populates="geometry", cascade_delete=True
     )
     calculation_links: list["CalculationGeometryLink"] = Relationship(
-        back_populates="geometry"
+        back_populates="geometry", cascade_delete=True
     )
 
     def relabel_atoms(self, indices: Sequence[int]) -> Self:
@@ -222,6 +254,70 @@ class GeometryRow(SQLModel, Geometry, table=True):
         )
 
 
+class TrajectoryAxisRow(SQLModel, table=True):
+    """Physical coordinate that one dimension of a trajectory runs along.
+
+    Examples:
+        A relaxed scan of the H-O-O-H dihedral of hydrogen peroxide:
+
+        >>> axis = TrajectoryAxisRow(axis=0, kind="dihedral", keys=[0, 1, 2, 3])
+        >>> geo = GeometryRow(
+        ...     symbols=["H", "O", "O", "H"],
+        ...     coordinates=[[0, 0, 1], [0, 0, 0], [0, 1, 0], [1, 1, 0]],
+        ... )
+        >>> axis.measure(geo)
+        90.0
+    """
+
+    __tablename__ = "trajectory_axis"
+
+    trajectory_id: uuid.UUID | None = _link_fk_field("trajectory.id")
+    """Foreign key to the `TrajectoryRow` this axis describes."""
+    axis: int = Field(primary_key=True)
+    """Dimension of the trajectory's geometry `index` that this axis describes."""
+    kind: AxisKind
+    """Kind of coordinate; `OTHER` coordinates are not measured from the geometry."""
+    keys: list[int] | None = Field(default=None, sa_column=Column(JSON))
+    """Indices of the atoms defining the coordinate (2, 3, or 4 for a distance,
+    angle, or dihedral)."""
+    units: str | None = None
+    """Units of the values along this axis (a `pint` unit string); on flush, defaults
+    to Angstrom for distances, degrees for angles, and dimensionless otherwise."""
+    label: str | None = None
+    """Human-readable description (e.g. ``"H-O-O-H torsion"``)."""
+    trajectory: "TrajectoryRow" = Relationship(back_populates="axes")
+    """The described `TrajectoryRow`."""
+
+    def measure(self, geo: Geometry) -> float | None:
+        """Measure this coordinate in `geo`, in `units`, or `None` for `OTHER` axes."""
+        kind = AxisKind(self.kind)
+        keys = list(self.keys or [])
+        if kind is AxisKind.DISTANCE:
+            value = distance(geo, keys)
+        elif kind is AxisKind.ANGLE:
+            value = angle(geo, keys, degrees=True)
+        elif kind is AxisKind.DIHEDRAL:
+            value = dihedral(geo, keys, degrees=True)
+        else:
+            return None
+        return self.convert(ureg.Quantity(value, kind.default_units))
+
+    def convert(self, value: object) -> float:
+        """Return `value` in `units`; a value without units is assumed to be in them.
+
+        Raises:
+            ValueError: If `value` is a `pint.Quantity` with incompatible units.
+        """
+        if not isinstance(value, pint.Quantity):
+            return float(value)  # ty: ignore[invalid-argument-type]
+        units = self.units or AxisKind(self.kind).default_units
+        try:
+            return float(value.m_as(units))
+        except pint.DimensionalityError as err:
+            msg = f"Expected units compatible with {units!r} but got {value.units:~}."
+            raise ValueError(msg) from err
+
+
 class TrajectoryRow(SQLModel, table=True):
     """Ordered sequence of geometries from a calculation trajectory.
 
@@ -229,20 +325,27 @@ class TrajectoryRow(SQLModel, table=True):
         id: Primary key.
         ndim: Length of each linked geometry's `index` (inferred from the first link
             if unset).
+        axes: Physical coordinates (e.g. a scanned dihedral) that the dimensions run
+            along, ordered by `axis`. Dimensions without one are only indexed.
         geometry_links: Raw link rows connecting geometries to this trajectory.
         calculation_links: Raw link rows connecting calculations to this trajectory.
     """
 
     __tablename__ = "trajectory"
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
     ndim: int | None = Field(default=None, nullable=True)
 
+    axes: list["TrajectoryAxisRow"] = Relationship(
+        back_populates="trajectory",
+        cascade_delete=True,
+        sa_relationship_kwargs={"order_by": "TrajectoryAxisRow.axis"},
+    )
     geometry_links: list["GeometryTrajectoryLink"] = Relationship(
-        back_populates="trajectory"
+        back_populates="trajectory", cascade_delete=True
     )
     calculation_links: list["CalculationTrajectoryLink"] = Relationship(
-        back_populates="trajectory"
+        back_populates="trajectory", cascade_delete=True
     )
 
     def geometries_along(
@@ -262,6 +365,54 @@ class TrajectoryRow(SQLModel, table=True):
             ValueError: If the trajectory has no indexed geometries, or `axis` or
                 `at` do not fit its number of dimensions.
         """
+        return [link.geometry for link in self._links_along(axis, at)]
+
+    def values_along(
+        self,
+        axis: int = 0,
+        at: Sequence[int] | None = None,
+        units: str | None = None,
+    ) -> npt.NDArray[np.float64]:
+        """Get the physical values of `axis` for the geometries of `geometries_along`.
+
+        Args:
+            axis: Dimension to run along.
+            at: Indices of the other dimensions, as in `geometries_along`.
+            units: Units to convert to. Defaults to the axis's units.
+
+        Returns:
+            The values along `axis`, with NaN where a geometry has none.
+
+        Raises:
+            ValueError: As for `geometries_along`, or if `units` is given for a
+                dimension without a `TrajectoryAxisRow`, or is incompatible with it.
+        """
+        values = np.array(
+            [
+                np.nan
+                if link.values is None or link.values[axis] is None
+                else link.values[axis]
+                for link in self._links_along(axis, at)
+            ],
+            dtype=np.float64,
+        )
+        if units is None:
+            return values
+        axis_row = next((row for row in self.axes if row.axis == axis), None)
+        if axis_row is None:
+            msg = f"Trajectory {self.id} has no TrajectoryAxisRow for axis {axis}"
+            raise ValueError(msg)
+        native = axis_row.units or AxisKind(axis_row.kind).default_units
+        try:
+            return ureg.Quantity(values, native).m_as(units)
+        except pint.DimensionalityError as err:
+            msg = f"Cannot convert axis {axis} values from {native!r} to {units!r}."
+            raise ValueError(msg) from err
+
+    def _links_along(
+        self, axis: int, at: Sequence[int] | None
+    ) -> list[GeometryTrajectoryLink]:
+        """Get the links of `geometries_along`, ordered by their index along `axis`."""
         links = [link for link in self.geometry_links if link.index is not None]
         if not links:
             msg = f"Trajectory {self.id} has no indexed geometries"
@@ -282,11 +433,11 @@ class TrajectoryRow(SQLModel, table=True):
 
         target = list(at)
         matches = [
-            (idx[axis], link.geometry)
+            (idx[axis], link)
             for idx, link in zip(indices, links, strict=True)
             if [idx[dim] for dim in others] == target
         ]
-        return [geo for _, geo in sorted(matches, key=lambda match: match[0])]
+        return [link for _, link in sorted(matches, key=lambda match: match[0])]
 
     def view(
         self,
@@ -339,7 +490,7 @@ class ModelRow(SQLModel, table=True):
 
     __tablename__ = "model"
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
     program: str
     program_version: str | None = None
     method: str
@@ -348,7 +499,9 @@ class ModelRow(SQLModel, table=True):
         default_factory=dict, sa_column=_json_dict_column()
     )
 
-    calculations: list["CalculationRow"] = Relationship(back_populates="model")
+    calculations: list["CalculationRow"] = Relationship(
+        back_populates="model", cascade_delete=True
+    )
 
 
 class CalculationRow(SQLModel, table=True):
@@ -371,8 +524,8 @@ class CalculationRow(SQLModel, table=True):
 
     __tablename__ = "calculation"
 
-    id: int | None = Field(default=None, primary_key=True)
-    model_id: int | None = _fk_field("model.id")
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+    model_id: uuid.UUID | None = _fk_field("model.id")
     calc_type: str
     input_provenance: dict[str, Any] | None = Field(
         default_factory=dict, sa_column=_json_dict_column()
@@ -382,16 +535,20 @@ class CalculationRow(SQLModel, table=True):
     )
 
     model: "ModelRow" = Relationship(back_populates="calculations")
-    properties: list["PropertyValueRow"] = Relationship(back_populates="calculation")
-    validations: list["ValidationRow"] = Relationship(back_populates="calculation")
+    properties: list["PropertyValueRow"] = Relationship(
+        back_populates="calculation", cascade_delete=True
+    )
+    validations: list["ValidationRow"] = Relationship(
+        back_populates="calculation", cascade_delete=True
+    )
     stationary_points: list["StationaryPointRow"] = Relationship(
-        back_populates="calculation"
+        back_populates="calculation", cascade_delete=True
     )
     geometry_links: list["CalculationGeometryLink"] = Relationship(
-        back_populates="calculation"
+        back_populates="calculation", cascade_delete=True
     )
     trajectory_links: list["CalculationTrajectoryLink"] = Relationship(
-        back_populates="calculation"
+        back_populates="calculation", cascade_delete=True
     )
 
 
@@ -399,15 +556,18 @@ class PropertyKindRow(SQLModel, table=True):
     """A kind of property (e.g. ``energy``, ``gradient``, ``hessian``).
 
     Rows mirror the in-memory `autostorage.property.PropertyKindRegistry`, keyed
-    by name. Validation and storage dtype are looked up from the registry by
-    name, so rows loaded from the database behave the same as freshly seeded
-    ones.
+    by name. Validation, unit conversion, and storage dtype are looked up from
+    the registry by name, so rows loaded from the database behave the same as
+    freshly seeded ones. The units are also stored, so the database records what
+    its values mean.
     """
 
     __tablename__ = "property_kind"
 
     name: str = Field(primary_key=True)
     """Primary key; name of the registered property kind."""
+    units: str
+    """Native units (a `pint` unit string) that values of this kind are stored in."""
     property_values: list["PropertyValueRow"] = Relationship(
         back_populates="property_kind"
     )
@@ -426,7 +586,7 @@ class PropertyValueRow(SQLModel, table=True):
     """Foreign key to the linked `GeometryRow`."""
     geometry: "GeometryRow" = Relationship(back_populates="properties")
     """The linked `GeometryRow`."""
-    calculation_id: int | None = _fk_field("calculation.id")
+    calculation_id: uuid.UUID | None = _fk_field("calculation.id")
     """Foreign key to the linked `CalculationRow`."""
     calculation: "CalculationRow" = Relationship(back_populates="properties")
     """The linked `CalculationRow`."""
@@ -437,8 +597,11 @@ class PropertyValueRow(SQLModel, table=True):
     value: Any = Field(sa_column=Column(CompressedArrayTypeDecorator(dtype=None)))
     """Value produced by `geometry` and `calculation`, as a NumPy array.
 
-    Validated and cast to the property kind's dtype on flush (float64, except
-    float32 for Hessians), so it may be assigned as a float, sequence, or array.
+    Stored in the property kind's native units. On flush, a `pint.Quantity` is
+    converted to those units, and other values are assumed to be in them already.
+    The value is then validated and cast to the kind's dtype (float64, except
+    float32 for Hessians), so it may be assigned as a float, sequence, array, or
+    quantity.
     """
 
 
@@ -456,8 +619,8 @@ class ValidationRow(SQLModel, table=True):
 
     __tablename__ = "validation"
 
-    id: int | None = Field(default=None, primary_key=True)
-    calculation_id: int | None = _fk_field("calculation.id")
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+    calculation_id: uuid.UUID | None = _fk_field("calculation.id")
 
     method: str
     extras: dict[str, Any] = Field(default_factory=dict, sa_column=_json_dict_column())
@@ -482,23 +645,24 @@ class StationaryPointRow(SQLModel, table=True):
             calculation).
         geometry: Geometry defining the coordinates of this point.
         calculation: Calculation that identified this point.
-        identities: Chemical identifiers (e.g. InChI, SMILES) for this point.
+        identity_links: Link rows to this point's chemical identifiers (e.g. InChI,
+            SMILES), each with its `identity_cache`.
         stages: Reaction stages this stationary point belongs to.
     """
 
     __tablename__ = "stationary_point"
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
     geometry_id: uuid.UUID | None = _fk_field("geometry.id")
-    calculation_id: int | None = _fk_field("calculation.id")
+    calculation_id: uuid.UUID | None = _fk_field("calculation.id")
     order: int = 0
     is_pseudo: bool = False
     is_validated: bool = False
 
     geometry: "GeometryRow" = Relationship(back_populates="stationary_points")
     calculation: "CalculationRow" = Relationship(back_populates="stationary_points")
-    identities: list["IdentityRow"] = Relationship(
-        back_populates="stationary_points", link_model=IdentityStationaryLink
+    identity_links: list["IdentityStationaryLink"] = Relationship(
+        back_populates="stationary", cascade_delete=True
     )
     stages: list["StageRow"] = Relationship(
         back_populates="stationaries", link_model=StageStationaryLink
@@ -522,7 +686,7 @@ class StageRow(SQLModel, table=True):
 
     __tablename__ = "stage"
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
     is_ts: bool = False
 
     stationaries: list["StationaryPointRow"] = Relationship(
@@ -556,19 +720,19 @@ class StepRow(SQLModel, table=True):
             "unq_step_stages_null_safe",
             "stage_id1",
             "stage_id2",
-            text("coalesce(stage_id_ts, 0)"),
+            text("coalesce(stage_id_ts, '')"),
             unique=True,
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
     """Primary key."""
     # Lookups by `stage_id1` use the unique indexes above (leading column)
-    stage_id1: int | None = _fk_field("stage.id", index=False)
+    stage_id1: uuid.UUID | None = _fk_field("stage.id", index=False)
     """The step's first non-TS stage (reactant or product)."""
-    stage_id2: int | None = _fk_field("stage.id")
+    stage_id2: uuid.UUID | None = _fk_field("stage.id")
     """The step's second non-TS stage (reactant or product)."""
-    stage_id_ts: int | None = _fk_field("stage.id", nullable=True)
+    stage_id_ts: uuid.UUID | None = _fk_field("stage.id", nullable=True)
     """The step's TS stage."""
     is_barrierless: bool = False
     """Whether this step proceeds without a formal TS."""
@@ -595,26 +759,25 @@ class IdentityAlgorithmRow(SQLModel, table=True):
     """A chemical identifier algorithm, mirroring an `IdentityAlgorithm`.
 
     Attributes:
-        id: Primary key.
-        name: Unique algorithm name (e.g. ``rdkit inchi``).
+        name: Primary key; the registered algorithm name (e.g. ``rdkit_inchi``).
         kind: Category of identifier produced (e.g. ``stereoisomer``, ``formula``).
-        parent_algorithm_id: Foreign key to the parent algorithm, whose identity
+        parent_algorithm_name: Foreign key to the parent algorithm, whose identity
             disambiguates this one's `other_geos`, if any.
     """
 
     __tablename__ = "identity_algorithm"
     model_config = SQLModelConfig(arbitrary_types_allowed=True)
 
-    id: int | None = Field(default=None, primary_key=True)
-    name: str = Field(unique=True)
+    name: str = Field(primary_key=True)
     kind: IdentityKind
-    parent_algorithm_id: int | None = _fk_field(
-        "identity_algorithm.id", nullable=True, index=False
+    parent_algorithm_name: str | None = _fk_field(
+        "identity_algorithm.name", nullable=True, index=False
     )
 
     parent_algorithm: "IdentityAlgorithmRow" = Relationship(
         sa_relationship_kwargs={
-            "foreign_keys": "[IdentityAlgorithmRow.parent_algorithm_id]"
+            "foreign_keys": "[IdentityAlgorithmRow.parent_algorithm_name]",
+            "remote_side": "[IdentityAlgorithmRow.name]",
         }
     )
     identities: list["IdentityRow"] = Relationship(back_populates="algorithm")
@@ -625,24 +788,24 @@ class IdentityRow(SQLModel, table=True):
 
     Attributes:
         id: Primary key.
-        algorithm_id: Foreign key to the generating `IdentityAlgorithmRow`.
+        algorithm_name: Foreign key to the generating `IdentityAlgorithmRow`.
         algorithm: Method used to generate the identifier (e.g. ``rdkit inchi``, ``rdkit
             smiles``); its ``kind`` gives the category (e.g. ``stereoisomer``,
             ``formula``).
         value: The resulting identifier string.
-        stationary_points: Stationary points sharing this identity.
+        stationary_links: Link rows to the stationary points sharing this identity.
     """
 
     __tablename__ = "identity"
     __table_args__ = (
-        UniqueConstraint("algorithm_id", "value", name="unique_identity"),
+        UniqueConstraint("algorithm_name", "value", name="unique_identity"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    algorithm_id: int | None = _fk_field("identity_algorithm.id")
+    id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+    algorithm_name: str | None = _fk_field("identity_algorithm.name")
     value: str
 
     algorithm: "IdentityAlgorithmRow" = Relationship(back_populates="identities")
-    stationary_points: list["StationaryPointRow"] = Relationship(
-        back_populates="identities", link_model=IdentityStationaryLink
+    stationary_links: list["IdentityStationaryLink"] = Relationship(
+        back_populates="identity", cascade_delete=True
     )

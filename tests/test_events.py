@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from autogeom import ureg
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -17,6 +18,7 @@ from autostorage.models import (
     GeometryRow,
     GeometryTrajectoryLink,
     IdentityRow,
+    IdentityStationaryLink,
     ModelRow,
     PropertyKindRow,
     PropertyValueRow,
@@ -145,16 +147,11 @@ class TestSortStepStageIds:
     def test_stage_ids_sorted_on_insert(self, database: Database) -> None:
         """stage_id1 and stage_id2 are auto-sorted on insert."""
         with database.session() as session:
-            # Create two stages (stage1 gets smaller id)
-            stage_small = StageRow(is_ts=False)
-            stage_large = StageRow(is_ts=False)
-            session.add_all([stage_small, stage_large])
+            # Create two stages, named by the order of their ids
+            stages = [StageRow(is_ts=False) for _ in range(2)]
+            session.add_all(stages)
             session.flush()
-
-            # stage_large.id should be > stage_small.id
-            assert stage_large.id is not None
-            assert stage_small.id is not None
-            assert stage_large.id > stage_small.id
+            stage_small, stage_large = sorted(stages, key=lambda s: str(s.id))
 
             # Create step with reversed stage IDs (large first, then small)
             step = StepRow(
@@ -175,18 +172,11 @@ class TestSortStepStageIds:
     def test_stage_ids_sorted_on_update(self, database: Database) -> None:
         """stage_id1 and stage_id2 are auto-sorted on update."""
         with database.session() as session:
-            # Create three stages
-            stage_a = StageRow(is_ts=False)
-            stage_b = StageRow(is_ts=False)
-            stage_c = StageRow(is_ts=False)
-            session.add_all([stage_a, stage_b, stage_c])
+            # Create three stages, named so that A < B < C
+            stages = [StageRow(is_ts=False) for _ in range(3)]
+            session.add_all(stages)
             session.flush()
-
-            # Ensure A < B < C
-            assert stage_a.id is not None
-            assert stage_b.id is not None
-            assert stage_c.id is not None
-            assert stage_a.id < stage_b.id < stage_c.id
+            stage_a, stage_b, stage_c = sorted(stages, key=lambda s: str(s.id))
 
             # Create step with correct order (A, B)
             step = StepRow(
@@ -232,17 +222,11 @@ class TestSortStepStageIds:
     def test_sorting_three_stage_ids(self, database: Database) -> None:
         """Sorting works with three different stages."""
         with database.session() as session:
-            # Create three stages
-            stage_x = StageRow(is_ts=False)
-            stage_y = StageRow(is_ts=False)
-            stage_z = StageRow(is_ts=False)
-            session.add_all([stage_x, stage_y, stage_z])
+            # Create three stages, named so that X < Y < Z
+            stages = [StageRow(is_ts=False) for _ in range(3)]
+            session.add_all(stages)
             session.flush()
-
-            # X < Y < Z
-            assert stage_x.id is not None
-            assert stage_y.id is not None
-            assert stage_z.id is not None
+            stage_x, _, stage_z = sorted(stages, key=lambda s: str(s.id))
 
             # Create step with reversed order (Z, X)
             step = StepRow(
@@ -567,17 +551,29 @@ class TestVerifyTrajectoryGeometryNdim:
             assert link2.index == [1, 2]
 
 
+def _identities(stat_point: StationaryPointRow) -> list[IdentityRow]:
+    """Return the identities linked to `stat_point`."""
+    return [link.identity for link in stat_point.identity_links]
+
+
+def _link_for_algorithm(
+    stat_point: StationaryPointRow, algorithm_name: str
+) -> IdentityStationaryLink:
+    """Return the single identity link of `stat_point` for `algorithm_name`."""
+    matches = [
+        link
+        for link in stat_point.identity_links
+        if link.identity.algorithm_name == algorithm_name
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def _identity_for_algorithm(
     stat_point: StationaryPointRow, algorithm_name: str
 ) -> IdentityRow:
     """Return the single identity attached to `stat_point` for `algorithm_name`."""
-    matches = [
-        ident
-        for ident in stat_point.identities
-        if ident.algorithm.name == algorithm_name
-    ]
-    assert len(matches) == 1
-    return matches[0]
+    return _link_for_algorithm(stat_point, algorithm_name).identity
 
 
 class TestAddInchiConnIdentity:
@@ -650,7 +646,7 @@ class TestAddInchiIdentity:
             session.add(stat_point)
             session.flush()
 
-            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat_point)) == EXPECTED_IDENTITY_COUNT
             identity = _identity_for_algorithm(stat_point, "rdkit_inchi")
             assert identity.algorithm.kind == "stereoisomer"
             assert identity.algorithm.name == "rdkit_inchi"
@@ -683,8 +679,8 @@ class TestAddInchiIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            assert len(stat1.identities) == EXPECTED_IDENTITY_COUNT
-            assert len(stat2.identities) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat1)) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat2)) == EXPECTED_IDENTITY_COUNT
             inchi1 = _identity_for_algorithm(stat1, "rdkit_inchi")
             inchi2 = _identity_for_algorithm(stat2, "rdkit_inchi")
             assert inchi1.id == inchi2.id
@@ -722,8 +718,8 @@ class TestAddInchiIdentity:
             session.add_all([stat1, stat2])
             session.flush()
 
-            assert len(stat1.identities) == EXPECTED_IDENTITY_COUNT
-            assert len(stat2.identities) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat1)) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat2)) == EXPECTED_IDENTITY_COUNT
             inchi1 = _identity_for_algorithm(stat1, "rdkit_inchi")
             inchi2 = _identity_for_algorithm(stat2, "rdkit_inchi")
             assert inchi1.id != inchi2.id
@@ -755,7 +751,7 @@ class TestAddInchiIdentity:
             session.flush()
 
             # Identity should be auto-populated despite using relationship objects
-            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat_point)) == EXPECTED_IDENTITY_COUNT
             identity = _identity_for_algorithm(stat_point, "rdkit_inchi")
             assert identity.algorithm.kind == "stereoisomer"
             assert identity.algorithm.name == "rdkit_inchi"
@@ -788,7 +784,7 @@ class TestAddSmilesIdentity:
             session.flush()
 
             # Should have one identity per registered algorithm.
-            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat_point)) == EXPECTED_IDENTITY_COUNT
             smiles_identity = _identity_for_algorithm(stat_point, "rdkit_smiles")
             assert smiles_identity.value == "C"  # Methane SMILES
 
@@ -890,7 +886,7 @@ class TestAddHillIdentity:
             session.flush()
 
             # Should have one identity per registered algorithm.
-            assert len(stat_point.identities) == EXPECTED_IDENTITY_COUNT
+            assert len(_identities(stat_point)) == EXPECTED_IDENTITY_COUNT
             hill_identity = _identity_for_algorithm(stat_point, "hill_formula")
             assert hill_identity.value == "CH4"  # Methane hill_formula
 
@@ -1044,7 +1040,55 @@ class TestVerifyPropertyValues:
                     value=value,
                 )
             )
-            with pytest.raises(ValueError, match="expected shape"):
+            with pytest.raises(ValueError, match=r"expected shape|numeric array"):
+                session.flush()
+
+    def test_quantity_converted_to_native_units(
+        self,
+        database: Database,
+        make_calculation: Callable[[], CalculationRow],
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """Quantities are stored as magnitudes in the kind's native units."""
+        with database.session() as session:
+            geo, calc = make_geometry_water(), make_calculation()
+            energy = PropertyValueRow(
+                geometry=geo,
+                calculation=calc,
+                property_kind_name="energy",
+                value=ureg.Quantity(-627.5094740631, "kcal/mol"),
+            )
+            gradient = PropertyValueRow(
+                geometry=geo,
+                calculation=calc,
+                property_kind_name="gradient",
+                value=ureg.Quantity(np.ones(9), "hartree / angstrom"),
+            )
+            session.add_all([energy, gradient])
+            session.commit()
+            session.expire_all()
+
+            assert float(energy.value) == pytest.approx(-1.0)
+            bohr_per_angstrom = ureg.Quantity(1, "bohr").m_as("angstrom")
+            np.testing.assert_allclose(gradient.value, bohr_per_angstrom)
+
+    def test_incompatible_units_raise(
+        self,
+        database: Database,
+        make_calculation: Callable[[], CalculationRow],
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """Quantities with units of the wrong dimensionality are rejected."""
+        with database.session() as session:
+            session.add(
+                PropertyValueRow(
+                    geometry=make_geometry_water(),
+                    calculation=make_calculation(),
+                    property_kind_name="energy",
+                    value=ureg.Quantity(1.0, "angstrom"),
+                )
+            )
+            with pytest.raises(ValueError, match="compatible with 'hartree'"):
                 session.flush()
 
     def test_property_kind_loaded_from_database(
@@ -1151,7 +1195,7 @@ class TestIdentityGenerationFailures:
             with pytest.warns(IdentityGenerationWarning, match="metals"):
                 session.commit()
 
-            assert [(i.algorithm.name, i.value) for i in stp.identities] == [
+            assert [(i.algorithm.name, i.value) for i in _identities(stp)] == [
                 ("hill_formula", "Cl2Fe")
             ]
 
@@ -1168,7 +1212,7 @@ class TestIdentityGenerationFailures:
             with pytest.warns(IdentityGenerationWarning, match="empty identity"):
                 session.commit()
 
-            assert all(ident.value for ident in stp.identities)
+            assert all(ident.value for ident in _identities(stp))
 
 
 class TestIdentitiesOnGeometryChange:
@@ -1188,14 +1232,84 @@ class TestIdentitiesOnGeometryChange:
             )
             session.add(stp)
             session.commit()
-            assert "H2O" in {i.value for i in stp.identities}
+            assert "H2O" in {i.value for i in _identities(stp)}
 
             stp.geometry = make_geometry_methane()
             session.commit()
 
-            values = {i.value for i in stp.identities}
+            values = {i.value for i in _identities(stp)}
             assert "CH4" in values
             assert "H2O" not in values
+
+    def test_reassigned_geometry_discards_identity_cache(
+        self,
+        database: Database,
+        make_calculation: Callable[[], CalculationRow],
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """Relinking the same identities after a geometry change resets the cache."""
+        with database.session() as session:
+            stp = StationaryPointRow(
+                geometry=make_geometry_water(), calculation=make_calculation()
+            )
+            session.add(stp)
+            session.commit()
+            ids_before = {ident.id for ident in _identities(stp)}
+            for link in stp.identity_links:
+                link.identity_cache = {"stale": True}
+            session.commit()
+
+            stp.geometry = make_geometry_water()
+            session.commit()
+            session.expire_all()
+
+            assert {ident.id for ident in _identities(stp)} == ids_before
+            assert all(link.identity_cache is None for link in stp.identity_links)
+
+
+class TestMinimaOnlyIdentities:
+    """Algorithms marked `minima_only` skip saddle points."""
+
+    def test_transition_state_skips_inchi(
+        self,
+        database: Database,
+        make_calculation: Callable[[], CalculationRow],
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """A first-order saddle point gets only its formula identity."""
+        with database.session() as session:
+            stp = StationaryPointRow(
+                geometry=make_geometry_water(), calculation=make_calculation(), order=1
+            )
+            session.add(stp)
+            session.commit()
+
+            names = {i.algorithm.name for i in _identities(stp)}
+            assert names == {"hill_formula"}
+
+    def test_order_change_regenerates_identities(
+        self,
+        database: Database,
+        make_calculation: Callable[[], CalculationRow],
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """Changing `order` adds or removes the `minima_only` identities."""
+        with database.session() as session:
+            stp = StationaryPointRow(
+                geometry=make_geometry_water(), calculation=make_calculation()
+            )
+            session.add(stp)
+            session.commit()
+            assert "rdkit_inchi" in {i.algorithm.name for i in _identities(stp)}
+
+            stp.order = 1
+            session.commit()
+            names = {i.algorithm.name for i in _identities(stp)}
+            assert names == {"hill_formula"}
+
+            stp.order = 0
+            session.commit()
+            assert len(_identities(stp)) == EXPECTED_IDENTITY_COUNT
 
 
 class TestPendingSiblingIdentities:
@@ -1215,7 +1329,9 @@ class TestPendingSiblingIdentities:
             session.add_all([stp1, stp2])
             session.commit()
 
-            assert {i.id for i in stp1.identities} == {i.id for i in stp2.identities}
+            assert {i.id for i in _identities(stp1)} == {
+                i.id for i in _identities(stp2)
+            }
             assert len(session.exec(select(IdentityRow)).all()) == (
                 EXPECTED_IDENTITY_COUNT
             )
@@ -1238,7 +1354,7 @@ class TestListenerScope:
             session.add(stp)
             session.commit()
 
-            assert stp.identities == []
+            assert stp.identity_links == []
 
 
 class TestPersistedSiblingIdentities:
@@ -1258,10 +1374,12 @@ class TestPersistedSiblingIdentities:
             session.commit()
 
             # Replace the canonical SMILES with an equivalent, non-canonical one
-            smiles = _identity_for_algorithm(stp1, "rdkit_smiles")
-            stp1.identities.remove(smiles)
-            stp1.identities.append(
-                IdentityRow(algorithm_id=smiles.algorithm_id, value="[H]O[H]")
+            smiles_link = _link_for_algorithm(stp1, "rdkit_smiles")
+            stp1.identity_links.remove(smiles_link)
+            stp1.identity_links.append(
+                IdentityStationaryLink(
+                    identity=IdentityRow(algorithm_name="rdkit_smiles", value="[H]O[H]")
+                )
             )
             session.commit()
 

@@ -1,5 +1,6 @@
 """Autostorage types."""
 
+import json
 import zlib
 from enum import StrEnum
 from io import BytesIO
@@ -9,7 +10,13 @@ import numpy as np
 from sqlalchemy import LargeBinary
 from sqlalchemy.types import TypeDecorator
 
-__all__ = ["CompressedArrayTypeDecorator", "IdentityKind", "Role"]
+__all__ = [
+    "AxisKind",
+    "CompressedArrayTypeDecorator",
+    "CompressedJSONTypeDecorator",
+    "IdentityKind",
+    "Role",
+]
 
 MAX_DECOMPRESSED_BYTES = 1 << 30
 """Upper bound on the decompressed size of a stored blob (guards against zip bombs)."""
@@ -76,6 +83,25 @@ class CompressedArrayTypeDecorator(TypeDecorator):
         return np.load(BytesIO(_decompress(value)), allow_pickle=False)
 
 
+class CompressedJSONTypeDecorator(TypeDecorator):
+    """Stores a JSON-serializable value as zlib-compressed binary data in the DB."""
+
+    impl = LargeBinary
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> bytes | None:  # noqa: ANN401, ARG002
+        """Convert a value to zlib-compressed JSON bytes for the database."""
+        if value is None:
+            return None
+        return zlib.compress(json.dumps(value, separators=(",", ":")).encode())
+
+    def process_result_value(self, value: bytes | None, dialect: Any) -> Any:  # noqa: ANN401, ARG002
+        """Convert compressed JSON bytes from the database back to a value."""
+        if value is None:
+            return None
+        return json.loads(_decompress(value))
+
+
 class Role(StrEnum):
     """Relationship between calculations and geometries/trajectories."""
 
@@ -90,3 +116,25 @@ class IdentityKind(StrEnum):
     ISOMER = "isomer"
     STEREOISOMER = "stereoisomer"
     CONFORMER = "conformer"
+
+
+class AxisKind(StrEnum):
+    """Physical coordinate that a trajectory dimension runs along."""
+
+    DISTANCE = "distance"
+    ANGLE = "angle"
+    DIHEDRAL = "dihedral"
+    OTHER = "other"
+    """Not measurable from the geometry (e.g. an IRC arc length)."""
+
+    @property
+    def key_count(self) -> int | None:
+        """Number of atom keys defining the coordinate, or `None` for `OTHER`."""
+        return {"distance": 2, "angle": 3, "dihedral": 4}.get(self.value)
+
+    @property
+    def default_units(self) -> str:
+        """Units that values are stored in unless the axis says otherwise."""
+        return {"distance": "angstrom", "other": "dimensionless"}.get(
+            self.value, "degree"
+        )
