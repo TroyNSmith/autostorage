@@ -30,13 +30,14 @@ def database(tmp_path: Path) -> Generator[Database]:
             calc = CalculationRow(
                 model=ModelRow(program="x", method="y"), calc_type="opt"
             )
-            for is_pseudo in (False, True):
+            for shift, is_pseudo in ((0.0, False), (0.01, True)):
+                # Shifted, since the same geometry can't be stored twice
                 geo = GeometryRow(
                     symbols=["O", "H", "H"],
                     coordinates=[
-                        [0.0, 0.0, 0.0],
-                        [0.0, 0.76, 0.59],
-                        [0.0, -0.76, 0.59],
+                        [shift, 0.0, 0.0],
+                        [shift, 0.76, 0.59],
+                        [shift, -0.76, 0.59],
                     ],
                 )
                 session.add(

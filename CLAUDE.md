@@ -15,6 +15,7 @@ The user guide is in `user_guide/`, and `.claude/skills/` comes from the copier 
 ## Behavior that isn't obvious from the models
 
 `events.py` binds SQLAlchemy ORM event listeners to `AutostorageSession`, the session type that `Database.session()` returns:
+- `GeometryRow.hash` is set to `geometry_hash()` (SHA-256 of symbols, coordinates, charge, spin) on insert and update; its unique index rejects storing an equal geometry twice with an `IntegrityError`.
 - Opening a `Database` seeds `IdentityAlgorithmRow` and `PropertyKindRow` from their in-memory registries.
 - Before a flush, property values are shape-checked and cast to their kind's dtype, and a stationary point marked valid must have a Hessian.
 - New stationary points get an `IdentityRow` for every algorithm in `IdentityAlgorithmRegistry` (`identity.py`; regenerated when the geometry or `order` changes). Failing algorithms are skipped with an `IdentityGenerationWarning`, and ones restricted by `orders` (InChIs and SMILES) are skipped when `algorithm.applies_to(order)` is `False`.

@@ -34,6 +34,7 @@ from .models import (
     TrajectoryAxisRow,
     TrajectoryRow,
     ValidationRow,
+    geometry_hash,
 )
 from .property import (
     PropertyKind,
@@ -79,6 +80,7 @@ __all__ = [
     "ValidationRow",
     "energy_property_kind",
     "events",
+    "geometry_hash",
     "gradient_property_kind",
     "hessian_property_kind",
     "hill_formula",

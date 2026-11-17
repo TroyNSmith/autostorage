@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+### Added
+- **`GeometryRow.hash`**: a unique, indexed SHA-256 digest of a geometry's symbols, coordinates, charge, and spin, set on insert and update by `geometry_hash()` (exported from `autostorage`). Storing an equal geometry twice raises an `IntegrityError`. **Breaking:** the new column changes the schema, so databases created by earlier versions must be regenerated.
+
 ### Changed
 - Removed parent from `hill_formula` because it is general and applies to any
   stationary point of any order.

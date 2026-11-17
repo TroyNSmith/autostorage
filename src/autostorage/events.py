@@ -29,6 +29,7 @@ from .models import (
     StepRow,
     TrajectoryAxisRow,
     TrajectoryRow,
+    geometry_hash,
 )
 from .property import PropertyKindRegistry, hessian_property_kind
 from .types import AxisKind
@@ -94,6 +95,17 @@ def create_property_kinds(session: Session) -> None:
             )
             raise ValueError(msg)
     session.commit()
+
+
+@event.listens_for(GeometryRow, "before_insert")
+@event.listens_for(GeometryRow, "before_update")
+def set_geometry_hash(
+    mapper: Mapper[GeometryRow],  # noqa: ARG001
+    connection: Connection,  # noqa: ARG001
+    target: GeometryRow,
+) -> None:
+    """Set `hash`, whose unique index rejects duplicate geometries."""
+    target.hash = geometry_hash(target)
 
 
 @event.listens_for(StepRow, "before_insert")
