@@ -4,7 +4,11 @@ __version__ = "0.0.22"
 
 from . import events, identity, query, types
 from .database import Database
-from .events import AutostorageSession, IdentityGenerationWarning
+from .events import (
+    AutostorageSession,
+    IdentityGenerationWarning,
+    StationaryOrderWarning,
+)
 from .identity import (
     IdentityAlgorithm,
     IdentityAlgorithmRegistry,
@@ -72,6 +76,7 @@ __all__ = [
     "Role",
     "StageRow",
     "StageStationaryLink",
+    "StationaryOrderWarning",
     "StationaryPointRow",
     "StepRow",
     "StepValidationLink",

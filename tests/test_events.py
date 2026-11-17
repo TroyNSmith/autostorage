@@ -13,7 +13,7 @@ from autogeom import ureg
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from autostorage import IdentityGenerationWarning
+from autostorage import IdentityGenerationWarning, StationaryOrderWarning
 from autostorage.database import Database
 from autostorage.models import (
     CalculationRow,
@@ -1246,6 +1246,109 @@ class TestVerifyValidStationaryHasHessian:
             session.commit()
 
             assert stp.is_validated
+
+
+def _diatomic_hessian(k: float) -> np.ndarray:
+    """Return a diatomic stretch Hessian; a negative `k` gives order 1."""
+    hess = np.zeros((6, 6))
+    hess[2, 2] = hess[5, 5] = k
+    hess[2, 5] = hess[5, 2] = -k
+    return hess
+
+
+class TestValidateStationaryOrder:
+    """Tests for validate_stationary_order_before_flush event listener."""
+
+    @staticmethod
+    def _add_point(
+        session: Session, *ks: float, order: int = 0, is_pseudo: bool = False
+    ) -> StationaryPointRow:
+        """Add an HF stationary point with a Hessian for each force constant."""
+        geo = GeometryRow(symbols=["H", "F"], coordinates=[[0, 0, 0], [0, 0, 0.92]])
+        calc = CalculationRow(
+            model=ModelRow(program="psi4", method="HF"), calc_type="freq"
+        )
+        session.add_all(
+            PropertyValueRow(
+                geometry=geo,
+                calculation=calc,
+                property_kind_name="hessian",
+                value=_diatomic_hessian(k),
+            )
+            for k in ks
+        )
+        stp = StationaryPointRow(
+            geometry=geo, calculation=calc, order=order, is_pseudo=is_pseudo
+        )
+        session.add(stp)
+        return stp
+
+    @pytest.mark.parametrize(("k", "order"), [(0.37, 0), (-0.1, 1)])
+    def test_matching_order_validated(
+        self, database: Database, k: float, order: int
+    ) -> None:
+        """A point whose Hessian has its order is validated."""
+        with database.session() as session:
+            stp = self._add_point(session, k, order=order)
+            session.commit()
+            assert stp.is_validated
+
+    @pytest.mark.parametrize("ks", [(-0.1,), (0.37, -0.1), (np.nan,)])
+    def test_mismatched_order_warns(
+        self, database: Database, ks: tuple[float, ...]
+    ) -> None:
+        """A point is not validated unless every Hessian is valid and has its order."""
+        with database.session() as session:
+            stp = self._add_point(session, *ks)
+            with pytest.warns(StationaryOrderWarning, match="has order 0"):
+                session.commit()
+            assert not stp.is_validated
+
+    def test_pseudo_skipped(self, database: Database) -> None:
+        """Pseudo stationary points are not validated."""
+        with database.session() as session:
+            stp = self._add_point(session, -0.1, is_pseudo=True)
+            session.commit()
+            assert not stp.is_validated
+
+    def test_hessian_added_later_validates(self, database: Database) -> None:
+        """Adding a Hessian to a stored point's geometry validates it."""
+        with database.session() as session:
+            stp = self._add_point(session)
+            session.commit()
+            assert not stp.is_validated
+
+            session.add(
+                PropertyValueRow(
+                    geometry=stp.geometry,
+                    calculation=stp.calculation,
+                    property_kind_name="hessian",
+                    value=_diatomic_hessian(0.37),
+                )
+            )
+            session.commit()
+            assert stp.is_validated
+
+    def test_order_change_demotes(self, database: Database) -> None:
+        """Changing `order` so it no longer matches resets `is_validated`."""
+        with database.session() as session:
+            stp = self._add_point(session, 0.37)
+            session.commit()
+
+            stp.order = 1
+            with pytest.warns(StationaryOrderWarning, match="have orders \\[0\\]"):
+                session.commit()
+            assert not stp.is_validated
+
+    def test_hessian_deleted_demotes(self, database: Database) -> None:
+        """Deleting the only Hessian resets `is_validated`."""
+        with database.session() as session:
+            stp = self._add_point(session, 0.37)
+            session.commit()
+
+            session.delete(stp.geometry.properties[0])
+            session.commit()
+            assert not stp.is_validated
 
 
 class TestTrajectoryNdimPersisted:

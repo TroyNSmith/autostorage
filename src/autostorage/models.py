@@ -655,8 +655,8 @@ class StationaryPointRow(SQLModel, table=True):
         calculation_id: Foreign key to the calculation that identified this point.
         order: Hessian index (0 for minima, 1 for first-order saddle points).
         is_pseudo: Whether this point is not a true stationary point (e.g. constrained).
-        is_validated: Whether this stationary point has been validated (e.g., by Hessian
-            calculation).
+        is_validated: Whether every Hessian of the geometry has `order` negative
+            eigenvalues; set on flush, unless the point is pseudo.
         geometry: Geometry defining the coordinates of this point.
         calculation: Calculation that identified this point.
         identity_links: Link rows to this point's chemical identifiers (e.g. InChI,
