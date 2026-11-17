@@ -110,11 +110,22 @@ class TestIdentityAlgorithmRegistry:
         ) -> str:
             return str(geo.atom_count)
 
+        # Order restriction must be compatible with parent
+        #  => This raises an error:
+        with pytest.raises(ValidationError):
+            algorithm = IdentityAlgorithmRegistry.register(
+                name="atom_count",
+                kind=IdentityKind.FORMULA,
+                identity_fn=atom_count_identity_fn,
+                parent=rdkit_inchi,
+            )
+        #  => This does not:
         algorithm = IdentityAlgorithmRegistry.register(
             name="atom_count",
             kind=IdentityKind.FORMULA,
             identity_fn=atom_count_identity_fn,
             parent=rdkit_inchi,
+            orders={0},
         )
         assert IdentityAlgorithmRegistry.get("atom_count") is algorithm
         assert algorithm.parent is rdkit_inchi
@@ -122,17 +133,18 @@ class TestIdentityAlgorithmRegistry:
 
     def test_builtin_algorithms(self) -> None:
         """The built-in algorithms have the expected kinds and parents."""
-        assert rdkit_inchi_conn.minima_only
-        assert rdkit_inchi.minima_only
-        assert rdkit_smiles.minima_only
         assert rdkit_inchi_conn.kind is IdentityKind.ISOMER
         assert rdkit_inchi_conn.parent is None
+        assert rdkit_inchi_conn.orders == {0}
         assert rdkit_inchi.kind is IdentityKind.STEREOISOMER
         assert rdkit_inchi.parent is None
+        assert rdkit_inchi.orders == {0}
         assert rdkit_smiles.kind is IdentityKind.STEREOISOMER
         assert rdkit_smiles.parent is rdkit_inchi
+        assert rdkit_smiles.orders == {0}
         assert hill_formula.kind is IdentityKind.FORMULA
-        assert hill_formula.parent is rdkit_inchi
+        assert hill_formula.parent is None
+        assert hill_formula.orders is None
 
 
 class TestIdentityAlgorithm:

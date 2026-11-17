@@ -17,7 +17,7 @@ The user guide is in `user_guide/`, and `.claude/skills/` comes from the copier 
 `events.py` binds SQLAlchemy ORM event listeners to `AutostorageSession`, the session type that `Database.session()` returns:
 - Opening a `Database` seeds `IdentityAlgorithmRow` and `PropertyKindRow` from their in-memory registries.
 - Before a flush, property values are shape-checked and cast to their kind's dtype, and a stationary point marked valid must have a Hessian.
-- New stationary points get an `IdentityRow` for every algorithm in `IdentityAlgorithmRegistry` (`identity.py`; regenerated when the geometry or `order` changes). Failing algorithms are skipped with an `IdentityGenerationWarning`, and `minima_only` ones (InChIs and SMILES) are skipped when `order != 0`.
+- New stationary points get an `IdentityRow` for every algorithm in `IdentityAlgorithmRegistry` (`identity.py`; regenerated when the geometry or `order` changes). Failing algorithms are skipped with an `IdentityGenerationWarning`, and ones restricted by `orders` (InChIs and SMILES) are skipped when `algorithm.applies_to(order)` is `False`.
 - `StepRow` stage IDs are sorted (`stage_id1 < stage_id2`), and `is_barrierless` must match whether there is a transition-state stage.
 - A trajectory's `ndim` is inferred from its geometry indices if unset.
 - Trajectory axes (`TrajectoryAxisRow`) are validated, and missing `GeometryTrajectoryLink.values` of distance/angle/dihedral axes are measured with autogeom (quantities are converted to the axis's units).

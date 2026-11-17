@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+### Changed
+- Removed parent from `hill_formula` because it is general and applies to any
+  stationary point of any order.
+- Restrict orders through a set of `orders` rather than a boolean, so that
+  second-order saddle-points aren't given invalid identities. Formula identities
+  and duplicate identities will have `orders = None` because they apply to any
+  order.
 
 ## [0.0.22] - 2026-11-15
 ### Added

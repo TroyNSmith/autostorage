@@ -495,8 +495,8 @@ def _attach_identities(ctx: _IdentityFlushContext, obj: StationaryPointRow) -> N
     Algorithms with a parent (e.g. SMILES, with InChI as parent) are passed
     `other_geos`: one geometry per existing identity value among stationary
     points sharing the parent identity. If an algorithm fails, a warning is
-    issued and its identity is skipped. Algorithms marked `minima_only` are
-    skipped for saddle points (nonzero `order`).
+    issued and its identity is skipped. Algorithms that do not apply to
+    stationary points of the given order are skipped.
     """
     geo_row = _resolve_geometry(ctx.session, obj)
     if geo_row is None:
@@ -505,7 +505,7 @@ def _attach_identities(ctx: _IdentityFlushContext, obj: StationaryPointRow) -> N
 
     keys: dict[str, _IdentityKey] = {}
     for algorithm in ctx.algorithms:
-        if algorithm.minima_only and obj.order != 0:
+        if not algorithm.applies_to(obj.order):
             continue
         name = algorithm.name
         parent = algorithm.parent

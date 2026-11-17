@@ -1,11 +1,11 @@
 """Identity algorithm registry with default definitions."""
 
-from collections.abc import Mapping
-from typing import ClassVar, Protocol, runtime_checkable
+from collections.abc import Iterable, Mapping
+from typing import ClassVar, Protocol, Self, runtime_checkable
 
 import autogeom
 from autogeom import Geometry
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from .types import IdentityKind
 
@@ -42,8 +42,8 @@ class IdentityAlgorithm(BaseModel):
         identity_fn: ``(geo, other_geos=None) -> str``, generating the identity.
         parent: Algorithm whose identity selects the `other_geos` passed to
             `identity_fn`, if any.
-        minima_only: Whether to skip stationary points with a nonzero `order`
-            (transition states and higher-order saddle points).
+        orders: Stationary point orders the algorithm applies to. `None` if it
+            applies to any order.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -52,7 +52,29 @@ class IdentityAlgorithm(BaseModel):
     kind: IdentityKind
     identity_fn: IdentityProtocol
     parent: "IdentityAlgorithm | None" = None
-    minima_only: bool = False
+    orders: frozenset[int] | None = None
+
+    def applies_to(self, order: int) -> bool:
+        """Check whether algorithm applies to a given order."""
+        return self.orders is None or order in self.orders
+
+    @model_validator(mode="after")
+    def _check_parent_orders(self) -> Self:
+        """Requires the orders to be a subset of the parent's orders."""
+        if self.parent is None or self.parent.orders is None:
+            return self
+
+        if self.orders is None or not self.orders <= self.parent.orders:
+            child = "all" if self.orders is None else sorted(self.orders)
+            parent = sorted(self.parent.orders)
+            msg = (
+                f"Orders {child} for child identity algorithm {self.name} "
+                f"are not compatible with orders {parent} or parent identity "
+                f"algorithm {self.parent.name}."
+            )
+            raise ValueError(msg)
+
+        return self
 
 
 class IdentityAlgorithmRegistry:
@@ -66,9 +88,9 @@ class IdentityAlgorithmRegistry:
         name: str,
         kind: IdentityKind,
         identity_fn: IdentityProtocol,
-        parent: IdentityAlgorithm | None = None,
         *,
-        minima_only: bool = False,
+        parent: IdentityAlgorithm | None = None,
+        orders: Iterable[int] | None = None,
     ) -> IdentityAlgorithm:
         """Create and register an identity algorithm.
 
@@ -82,21 +104,19 @@ class IdentityAlgorithmRegistry:
             parent: Algorithm whose identity selects `other_geos`. If given,
                 `identity_fn` receives one geometry per existing identity value
                 among the stationary points that share the parent identity.
-            minima_only: Whether to skip stationary points with a nonzero `order`
-                (e.g. transition states).
+            orders: Stationary point orders the algorithm applies to. `None` if it
+                applies to any order.
 
         Raises:
-            ValueError: If an algorithm named `name` is already registered.
+            ValueError: If an algorithm named `name` is already registered, or
+                `orders` isn't a subset of the parent's orders.
         """
         if any(name == a.name for a in cls.algorithms):
             msg = f"Identity algorithm {name!r} is already registered."
             raise ValueError(msg)
+        orders = None if orders is None else frozenset(orders)
         algorithm = IdentityAlgorithm(
-            name=name,
-            kind=kind,
-            identity_fn=identity_fn,
-            parent=parent,
-            minima_only=minima_only,
+            name=name, kind=kind, identity_fn=identity_fn, parent=parent, orders=orders
         )
         cls.algorithms.append(algorithm)
         return algorithm
@@ -128,7 +148,7 @@ rdkit_inchi_conn = IdentityAlgorithmRegistry.register(
     name="rdkit_inchi_conn",
     kind=IdentityKind.ISOMER,
     identity_fn=rdkit_inchi_conn_identity_fn,
-    minima_only=True,
+    orders={0},
 )
 """Connectivity InChI from RDKit (kind: isomer; minima only)."""
 
@@ -145,7 +165,7 @@ rdkit_inchi = IdentityAlgorithmRegistry.register(
     name="rdkit_inchi",
     kind=IdentityKind.STEREOISOMER,
     identity_fn=rdkit_inchi_identity_fn,
-    minima_only=True,
+    orders={0},
 )
 """Standard InChI from RDKit (kind: stereoisomer; minima only)."""
 
@@ -170,7 +190,7 @@ rdkit_smiles = IdentityAlgorithmRegistry.register(
     kind=IdentityKind.STEREOISOMER,
     identity_fn=rdkit_smiles_identity_fn,
     parent=rdkit_inchi,
-    minima_only=True,
+    orders={0},
 )
 """SMILES from RDKit (kind: stereoisomer; parent: `rdkit_inchi`; minima only).
 
@@ -190,6 +210,5 @@ hill_formula = IdentityAlgorithmRegistry.register(
     name="hill_formula",
     kind=IdentityKind.FORMULA,
     identity_fn=hill_formula_identity_fn,
-    parent=rdkit_inchi,
 )
-"""Molecular formula in Hill order (kind: formula; parent: `rdkit_inchi`)."""
+"""Molecular formula in Hill order (kind: formula)."""

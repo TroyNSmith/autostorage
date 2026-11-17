@@ -21,7 +21,8 @@ autostorage registers the following algorithms itself:
 | `hill_formula` | `formula` | `rdkit_inchi` | Formula in Hill order, from `autogeom.formula` |
 
 When a `StationaryPointRow` is added through a `Database.session()`, an `IdentityRow` is attached to it for every registered algorithm, and regenerated if its geometry or `order` changes.
-Algorithms registered with `minima_only=True`, including both InChI algorithms and `rdkit_smiles`, are skipped for saddle points (`order != 0`, such as transition states), so of the built-in algorithms only `hill_formula` is applied to them.
+Algorithms registered with restricted `orders = {0}`, such as `rdkit_inchi_conn`, `rdkit_inchi`, and `rdkit_smiles`, are skipped for higher-order saddle points.
+Unrestricted algorithms such as `hill_formula` apply to all algorithms.
 Stationary points with the same value share one `IdentityRow`.
 Stereoisomers such as cis- and trans-1,2-difluoroethene therefore share one `rdkit_inchi_conn` identity but have different `rdkit_inchi` identities.
 If an algorithm fails for a geometry (for example, InChI for a metal complex), an `IdentityGenerationWarning` is issued and that identity is skipped.
@@ -84,6 +85,7 @@ rmsd_conformer = IdentityAlgorithmRegistry.register(
     kind=IdentityKind.CONFORMER,
     identity_fn=rmsd_conformer_identity_fn,
     parent=rdkit_inchi,  # compare only against geometries with the same InChI
+    orders={0},  # must be compatible with parent orders
 )
 
 db = Database(":memory:")  # new stationary points now also get an rmsd_conformer identity
