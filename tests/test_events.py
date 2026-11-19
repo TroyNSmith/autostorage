@@ -1,9 +1,11 @@
 """Tests for SQLAlchemy ORM event listeners."""
 
+import itertools
 import tempfile
 import uuid
 from collections.abc import Callable, Generator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -11,7 +13,7 @@ from autogeom import ureg
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from autostorage import IdentityGenerationWarning
+from autostorage import IdentityGenerationWarning, StationaryOrderWarning
 from autostorage.database import Database
 from autostorage.models import (
     CalculationRow,
@@ -26,6 +28,7 @@ from autostorage.models import (
     StationaryPointRow,
     StepRow,
     TrajectoryRow,
+    geometry_hash,
 )
 
 # Test data constants
@@ -63,82 +66,172 @@ def make_calculation() -> Callable[[], CalculationRow]:
     return _make
 
 
+def _geometry_factory(
+    symbols: list[str], coordinates: list[list[float]]
+) -> Callable[[], GeometryRow]:
+    """Return a factory for the geometry, translated further along x on each call.
+
+    Stored geometries must be distinct, and translating keeps their identities.
+    """
+    calls = itertools.count()
+
+    def _make() -> GeometryRow:
+        shift = 0.01 * next(calls)
+        coords = [[x + shift, y, z] for x, y, z in coordinates]
+        return GeometryRow(symbols=symbols, coordinates=coords, charge=0, spin=0)
+
+    return _make
+
+
 @pytest.fixture
 def make_geometry_water() -> Callable[[], GeometryRow]:
     """Create factory for a water geometry (O, H, H)."""
-
-    def _make() -> GeometryRow:
-        return GeometryRow(
-            symbols=["O", "H", "H"],
-            coordinates=[[0.0, 0.0, 0.0], [0.0, 0.76, 0.59], [0.0, -0.76, 0.59]],
-        )
-
-    return _make
+    return _geometry_factory(
+        ["O", "H", "H"], [[0.0, 0.0, 0.0], [0.0, 0.76, 0.59], [0.0, -0.76, 0.59]]
+    )
 
 
 @pytest.fixture
 def make_geometry_methane() -> Callable[[], GeometryRow]:
     """Create factory for a methane geometry (C, H, H, H, H)."""
-
-    def _make() -> GeometryRow:
-        return GeometryRow(
-            symbols=["C", "H", "H", "H", "H"],
-            coordinates=[
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-                [-1.0, 0.0, 0.0],
-            ],
-            charge=0,
-            spin=0,
-        )
-
-    return _make
+    return _geometry_factory(
+        ["C", "H", "H", "H", "H"],
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+        ],
+    )
 
 
 @pytest.fixture
 def make_geometry_trans_difluoroethene() -> Callable[[], GeometryRow]:
     """Create factory for a planar trans-1,2-difluoroethene sketch (C2H2F2)."""
-
-    def _make() -> GeometryRow:
-        return GeometryRow(
-            symbols=["C", "C", "F", "H", "F", "H"],
-            coordinates=[
-                [-0.6, 0.0, 0.0],
-                [0.6, 0.0, 0.0],
-                [-1.2, 1.0, 0.0],
-                [-1.2, -1.0, 0.0],
-                [1.2, -1.0, 0.0],
-                [1.2, 1.0, 0.0],
-            ],
-            charge=0,
-            spin=0,
-        )
-
-    return _make
+    return _geometry_factory(
+        ["C", "C", "F", "H", "F", "H"],
+        [
+            [-0.6, 0.0, 0.0],
+            [0.6, 0.0, 0.0],
+            [-1.2, 1.0, 0.0],
+            [-1.2, -1.0, 0.0],
+            [1.2, -1.0, 0.0],
+            [1.2, 1.0, 0.0],
+        ],
+    )
 
 
 @pytest.fixture
 def make_geometry_cis_difluoroethene() -> Callable[[], GeometryRow]:
     """Create factory for a planar cis-1,2-difluoroethene sketch (C2H2F2)."""
+    return _geometry_factory(
+        ["C", "C", "F", "H", "F", "H"],
+        [
+            [-0.6, 0.0, 0.0],
+            [0.6, 0.0, 0.0],
+            [-1.2, 1.0, 0.0],
+            [-1.2, -1.0, 0.0],
+            [1.2, 1.0, 0.0],
+            [1.2, -1.0, 0.0],
+        ],
+    )
 
-    def _make() -> GeometryRow:
-        return GeometryRow(
-            symbols=["C", "C", "F", "H", "F", "H"],
-            coordinates=[
-                [-0.6, 0.0, 0.0],
-                [0.6, 0.0, 0.0],
-                [-1.2, 1.0, 0.0],
-                [-1.2, -1.0, 0.0],
-                [1.2, 1.0, 0.0],
-                [1.2, -1.0, 0.0],
-            ],
-            charge=0,
-            spin=0,
-        )
 
-    return _make
+class TestSetGeometryHash:
+    """Tests for set_geometry_hash event listener."""
+
+    def test_hash_set_on_insert(
+        self,
+        database: Database,
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """The hash is set on insert and matches `geometry_hash`."""
+        with database.session() as session:
+            geo = make_geometry_water()
+            session.add(geo)
+            session.commit()
+            session.refresh(geo)
+
+            assert geo.hash == geometry_hash(geo)
+
+    def test_duplicate_geometry_rejected(self, database: Database) -> None:
+        """Storing an equal geometry again violates the unique hash."""
+        coords = [[0.0, 0.0, 0.0], [0.0, 0.76, 0.59], [0.0, -0.76, 0.59]]
+        with database.session() as session:
+            session.add(GeometryRow(symbols=["O", "H", "H"], coordinates=coords))
+            session.commit()
+
+            session.add(GeometryRow(symbols=["O", "H", "H"], coordinates=coords))
+            with pytest.raises(IntegrityError, match=r"geometry\.hash"):
+                session.commit()
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"symbols": ["S", "H", "H"]},
+            {"charge": 2},
+            {"coordinates": [[1e-12, 0.0, 0.0], [0.0, 0.76, 0.59], [0.0, -0.76, 0.59]]},
+        ],
+    )
+    def test_different_geometries_allowed(
+        self, database: Database, changes: dict[str, Any]
+    ) -> None:
+        """Geometries differing in any field get different hashes."""
+        fields: dict[str, Any] = {
+            "symbols": ["O", "H", "H"],
+            "coordinates": [[0.0, 0.0, 0.0], [0.0, 0.76, 0.59], [0.0, -0.76, 0.59]],
+        }
+        geo1 = GeometryRow(**fields)
+        geo2 = GeometryRow(**(fields | changes))
+        with database.session() as session:
+            session.add_all([geo1, geo2])
+            session.commit()
+
+            assert geo1.hash != geo2.hash
+
+    def test_negative_zero_equals_zero(self) -> None:
+        """-0.0 and 0.0 coordinates hash the same, as they compare equal."""
+        geo1 = GeometryRow(symbols=["He"], coordinates=[[0.0, 0.0, 0.0]])
+        geo2 = GeometryRow(symbols=["He"], coordinates=[[-0.0, 0.0, 0.0]])
+        assert geometry_hash(geo1) == geometry_hash(geo2)
+
+    def test_hash_updated(
+        self,
+        database: Database,
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """The hash is recomputed when the geometry changes."""
+        with database.session() as session:
+            geo = make_geometry_water()
+            session.add(geo)
+            session.commit()
+            old_hash = geo.hash
+
+            geo.coordinates = geo.coordinates + 1.0
+            session.commit()
+            session.refresh(geo)
+
+            assert geo.hash != old_hash
+            assert geo.hash == geometry_hash(geo)
+
+    def test_lookup_by_hash(
+        self,
+        database: Database,
+        make_geometry_water: Callable[[], GeometryRow],
+    ) -> None:
+        """A stored geometry can be found from an equal in-memory geometry."""
+        geo = make_geometry_water()
+        with database.session() as session:
+            session.add(geo)
+            session.commit()
+            copy = geo.relabel_atoms([0, 1, 2])
+
+            found = session.exec(
+                select(GeometryRow).where(GeometryRow.hash == geometry_hash(copy))
+            ).one()
+
+            assert found.id == geo.id
 
 
 class TestSortStepStageIds:
@@ -1153,6 +1246,109 @@ class TestVerifyValidStationaryHasHessian:
             session.commit()
 
             assert stp.is_validated
+
+
+def _diatomic_hessian(k: float) -> np.ndarray:
+    """Return a diatomic stretch Hessian; a negative `k` gives order 1."""
+    hess = np.zeros((6, 6))
+    hess[2, 2] = hess[5, 5] = k
+    hess[2, 5] = hess[5, 2] = -k
+    return hess
+
+
+class TestValidateStationaryOrder:
+    """Tests for validate_stationary_order_before_flush event listener."""
+
+    @staticmethod
+    def _add_point(
+        session: Session, *ks: float, order: int = 0, is_pseudo: bool = False
+    ) -> StationaryPointRow:
+        """Add an HF stationary point with a Hessian for each force constant."""
+        geo = GeometryRow(symbols=["H", "F"], coordinates=[[0, 0, 0], [0, 0, 0.92]])
+        calc = CalculationRow(
+            model=ModelRow(program="psi4", method="HF"), calc_type="freq"
+        )
+        session.add_all(
+            PropertyValueRow(
+                geometry=geo,
+                calculation=calc,
+                property_kind_name="hessian",
+                value=_diatomic_hessian(k),
+            )
+            for k in ks
+        )
+        stp = StationaryPointRow(
+            geometry=geo, calculation=calc, order=order, is_pseudo=is_pseudo
+        )
+        session.add(stp)
+        return stp
+
+    @pytest.mark.parametrize(("k", "order"), [(0.37, 0), (-0.1, 1)])
+    def test_matching_order_validated(
+        self, database: Database, k: float, order: int
+    ) -> None:
+        """A point whose Hessian has its order is validated."""
+        with database.session() as session:
+            stp = self._add_point(session, k, order=order)
+            session.commit()
+            assert stp.is_validated
+
+    @pytest.mark.parametrize("ks", [(-0.1,), (0.37, -0.1), (np.nan,)])
+    def test_mismatched_order_warns(
+        self, database: Database, ks: tuple[float, ...]
+    ) -> None:
+        """A point is not validated unless every Hessian is valid and has its order."""
+        with database.session() as session:
+            stp = self._add_point(session, *ks)
+            with pytest.warns(StationaryOrderWarning, match="has order 0"):
+                session.commit()
+            assert not stp.is_validated
+
+    def test_pseudo_skipped(self, database: Database) -> None:
+        """Pseudo stationary points are not validated."""
+        with database.session() as session:
+            stp = self._add_point(session, -0.1, is_pseudo=True)
+            session.commit()
+            assert not stp.is_validated
+
+    def test_hessian_added_later_validates(self, database: Database) -> None:
+        """Adding a Hessian to a stored point's geometry validates it."""
+        with database.session() as session:
+            stp = self._add_point(session)
+            session.commit()
+            assert not stp.is_validated
+
+            session.add(
+                PropertyValueRow(
+                    geometry=stp.geometry,
+                    calculation=stp.calculation,
+                    property_kind_name="hessian",
+                    value=_diatomic_hessian(0.37),
+                )
+            )
+            session.commit()
+            assert stp.is_validated
+
+    def test_order_change_demotes(self, database: Database) -> None:
+        """Changing `order` so it no longer matches resets `is_validated`."""
+        with database.session() as session:
+            stp = self._add_point(session, 0.37)
+            session.commit()
+
+            stp.order = 1
+            with pytest.warns(StationaryOrderWarning, match="have orders \\[0\\]"):
+                session.commit()
+            assert not stp.is_validated
+
+    def test_hessian_deleted_demotes(self, database: Database) -> None:
+        """Deleting the only Hessian resets `is_validated`."""
+        with database.session() as session:
+            stp = self._add_point(session, 0.37)
+            session.commit()
+
+            session.delete(stp.geometry.properties[0])
+            session.commit()
+            assert not stp.is_validated
 
 
 class TestTrajectoryNdimPersisted:

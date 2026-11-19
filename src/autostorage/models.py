@@ -1,5 +1,7 @@
 """SQLModel row definitions for autostorage's schema."""
 
+import hashlib
+import json
 import uuid
 from collections.abc import Sequence
 from typing import Any, Self
@@ -67,6 +69,15 @@ def _role_column() -> Column:
 def _json_dict_column() -> Column:
     """Build a JSON column whose dict value tracks in-place changes."""
     return Column(MutableDict.as_mutable(JSON))
+
+
+def geometry_hash(geo: Geometry) -> str:
+    """SHA-256 digest of a Geometry's symbols, coordinates, charge, and spin."""
+    header = json.dumps([geo.symbols, geo.charge, geo.spin])
+    coords = np.ascontiguousarray(geo.coordinates, dtype="<f8") + 0.0
+    digest = hashlib.sha256(header.encode())
+    digest.update(coords.tobytes())
+    return digest.hexdigest()
 
 
 # 0. Link rows
@@ -211,6 +222,8 @@ class GeometryRow(SQLModel, Geometry, table=True):
             is converted to Angstrom.
         charge: Total molecular charge.
         spin: Number of unpaired electrons (2S).
+        hash: `geometry_hash` of this geometry, set on flush. Unique, so the same
+            geometry can't be stored twice.
         properties: Property values (energies, gradients, Hessians, ...) computed at
             this geometry.
         stationary_points: Stationary points defined by this geometry.
@@ -228,6 +241,7 @@ class GeometryRow(SQLModel, Geometry, table=True):
     )
     charge: int = 0
     spin: int = 0
+    hash: str | None = Field(default=None, unique=True, index=True, nullable=False)
 
     properties: list["PropertyValueRow"] = Relationship(
         back_populates="geometry", cascade_delete=True
@@ -641,8 +655,8 @@ class StationaryPointRow(SQLModel, table=True):
         calculation_id: Foreign key to the calculation that identified this point.
         order: Hessian index (0 for minima, 1 for first-order saddle points).
         is_pseudo: Whether this point is not a true stationary point (e.g. constrained).
-        is_validated: Whether this stationary point has been validated (e.g., by Hessian
-            calculation).
+        is_validated: Whether every Hessian of the geometry has `order` negative
+            eigenvalues; set on flush, unless the point is pseudo.
         geometry: Geometry defining the coordinates of this point.
         calculation: Calculation that identified this point.
         identity_links: Link rows to this point's chemical identifiers (e.g. InChI,

@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+### Added
+- **`GeometryRow.hash`**: a unique, indexed SHA-256 digest of a geometry's symbols, coordinates, charge, and spin, set on insert and update by `geometry_hash()` (exported from `autostorage`). Storing an equal geometry twice raises an `IntegrityError`. **Breaking:** the new column changes the schema, so databases created by earlier versions must be regenerated.
+- **`validate_stationary_order_before_flush`**: an event that sets `StationaryPointRow.is_validated` when every Hessian of the point's geometry has `order` negative eigenvalues, from autogeom's vibrational analysis (`vibrational_analysis` and `stationary_point_order`). On a mismatch, or a Hessian that is not finite, `is_validated` is reset to `False` and a new `StationaryOrderWarning` is issued. The check runs again when the point, or a Hessian of its geometry, is added, changed, or deleted. Pseudo stationary points are skipped.
+
 ### Changed
+- autostorage requires autogeom 0.0.3 or newer, which added vibrational analysis, and pydantic 2.10.1 or newer, since autogeom 0.0.3 allows pydantic 2.10.0, which breaks `default_factory` fields in SQLModel table rows.
 - Removed parent from `hill_formula` because it is general and applies to any
   stationary point of any order.
 - Restrict orders through a set of `orders` rather than a boolean, so that

@@ -9,8 +9,15 @@ import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+import numpy as np
 import pint
-from autogeom import GeometryConversionError, ureg
+from autogeom import (
+    GeometryConversionError,
+    PESPoint,
+    stationary_point_order,
+    ureg,
+    vibrational_analysis,
+)
 from sqlalchemy import event, inspect
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper, UOWTransaction, aliased
@@ -29,6 +36,7 @@ from .models import (
     StepRow,
     TrajectoryAxisRow,
     TrajectoryRow,
+    geometry_hash,
 )
 from .property import PropertyKindRegistry, hessian_property_kind
 from .types import AxisKind
@@ -40,6 +48,10 @@ class AutostorageSession(Session):
 
 class IdentityGenerationWarning(UserWarning):
     """An identity algorithm could not generate an identity for a geometry."""
+
+
+class StationaryOrderWarning(UserWarning):
+    """A stationary point's Hessian does not have the point's `order`."""
 
 
 # Errors that the built-in identity functions raise for unsupported or unperceivable
@@ -94,6 +106,17 @@ def create_property_kinds(session: Session) -> None:
             )
             raise ValueError(msg)
     session.commit()
+
+
+@event.listens_for(GeometryRow, "before_insert")
+@event.listens_for(GeometryRow, "before_update")
+def set_geometry_hash(
+    mapper: Mapper[GeometryRow],  # noqa: ARG001
+    connection: Connection,  # noqa: ARG001
+    target: GeometryRow,
+) -> None:
+    """Set `hash`, whose unique index rejects duplicate geometries."""
+    target.hash = geometry_hash(target)
 
 
 @event.listens_for(StepRow, "before_insert")
@@ -196,17 +219,24 @@ def verify_property_values_before_flush(
         obj.value = value
 
 
-def _has_hessian(session: Session, geo_row: GeometryRow) -> bool:
-    """Return whether a Hessian is stored, or pending, for `geo_row`."""
-    hessian = hessian_property_kind.name
-    if any(_property_kind_name(p) == hessian for p in geo_row.properties):
-        return True
-    return any(
+def _is_hessian(obj: object) -> bool:
+    return (
         isinstance(obj, PropertyValueRow)
-        and (obj.geometry is geo_row or obj.geometry_id == geo_row.id)
-        and _property_kind_name(obj) == hessian
-        for obj in session.new
+        and _property_kind_name(obj) == hessian_property_kind.name
     )
+
+
+def _hessians(session: Session, geo_row: GeometryRow) -> list[PropertyValueRow]:
+    """Return the Hessians stored, or pending, for `geo_row`."""
+    pending = [
+        obj
+        for obj in session.new
+        if isinstance(obj, PropertyValueRow)
+        and (obj.geometry is geo_row or obj.geometry_id == geo_row.id)
+    ]
+    # Pending rows are usually in `geo_row.properties` too, so deduplicate by identity
+    unique = {id(p): p for p in (*geo_row.properties, *pending)}
+    return [p for p in unique.values() if _is_hessian(p) and p not in session.deleted]
 
 
 @event.listens_for(AutostorageSession, "before_flush")
@@ -221,12 +251,64 @@ def verify_valid_stationary_has_hessian(
             continue
 
         geo_row = _resolve_geometry(session, obj)
-        if geo_row is not None and not _has_hessian(session, geo_row):
+        if geo_row is not None and not _hessians(session, geo_row):
             msg = (
                 "StationaryPointRow cannot be marked as validated without a "
                 f"Hessian attached to its geometry (geometry_id={geo_row.id})"
             )
             raise ValueError(msg)
+
+
+@event.listens_for(AutostorageSession, "before_flush")
+def validate_stationary_order_before_flush(
+    session: Session,
+    flush_context: UOWTransaction,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
+) -> None:
+    """Set `is_validated` from whether the Hessians have the stationary point's order.
+
+    Runs for new or modified stationary points, and for those whose geometry gains,
+    changes, or loses a Hessian. A point is validated if every Hessian of its geometry
+    has `order` negative eigenvalues (`autogeom.stationary_point_order`); otherwise it
+    is not, with a `StationaryOrderWarning`. Pseudo stationary points are skipped.
+    """
+    pending = _pending(session, StationaryPointRow)
+    points = {id(stp): stp for stp in pending}
+    for obj in (*session.new, *session.dirty, *session.deleted):
+        if _is_hessian(obj) and (geo_row := _resolve_geometry(session, obj)):
+            points.update({id(stp): stp for stp in geo_row.stationary_points})
+
+    for stp in points.values():
+        geo_row = _resolve_geometry(session, stp)
+        if stp.is_pseudo or geo_row is None or stp in session.deleted:
+            continue
+        hessians = _hessians(session, geo_row)
+        if not hessians:
+            # A pending point marked as validated is rejected by
+            # `verify_valid_stationary_has_hessian`
+            if stp not in pending:
+                stp.is_validated = False
+            continue
+        orders = [_hessian_order(geo_row, hess) for hess in hessians]
+        stp.is_validated = all(order == stp.order for order in orders)
+        if not stp.is_validated:
+            msg = (
+                f"StationaryPointRow {stp.id} has order {stp.order}, but the "
+                f"Hessians of GeometryRow {geo_row.id} have orders {orders}; "
+                "it is not validated."
+            )
+            warnings.warn(msg, StationaryOrderWarning, stacklevel=2)
+
+
+def _hessian_order(geo_row: GeometryRow, hess: PropertyValueRow) -> int | None:
+    """Return the stationary point order of `hess`, or `None` if it is invalid."""
+    try:
+        point = PESPoint(
+            geometry=geo_row, hessian=np.asarray(hess.value, dtype=np.float64)
+        )
+    except ValueError:
+        return None
+    return stationary_point_order(vibrational_analysis(point))
 
 
 @event.listens_for(AutostorageSession, "before_flush")
