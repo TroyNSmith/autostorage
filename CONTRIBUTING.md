@@ -25,6 +25,7 @@ The project follows the [copier-pixi-python](https://github.com/avcopan/copier-p
 | `pixi run pre-commit-check` | The same, without the tests |
 | `pixi run docs-preview` | Build and preview the documentation site |
 | `pixi run add <pkg>` | Add a run dependency to `pyproject.toml` |
+| `pixi run -e demo python demo/<script>.py` | Run a demo with the ORCA Python Interface (`orca-pi`); ORCA itself must be installed separately |
 
 To run a single test, call pytest in the `test` environment:
 ```bash

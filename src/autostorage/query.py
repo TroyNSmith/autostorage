@@ -51,3 +51,19 @@ def stationary_point_by_identity(
     if not include_pseudo:
         stmt = stmt.where(col(StationaryPointRow.is_pseudo).is_(False))
     return stmt
+
+
+"""
+1) A + B -> AB* -> C
+2) A -> A* -> D + E
+
+query.step_by_identities(
+    algorithm: IdentityAlgorithm,
+    stage1: Sequence[str | IdentityValue], # Identities for the first stage of the reaction
+    stage2: Sequence[str | IdentityValue] | None, # Identities for the second stage of the reaction
+    *,
+    models: Sequence[ModelRow] | None, # List of models to filter by
+    strict: bool = True, # Whether to accept partial matches
+)
+# This will look for stage1 on both sides, as well as stage2 if provided (stage 2 would have to be opposite side)
+"""

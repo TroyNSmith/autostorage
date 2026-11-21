@@ -9,5 +9,7 @@
   "python.languageServer": "None",
   // Run the tests from the Testing view in the test environment, as `pixi run test` does
   "python.defaultInterpreterPath": "${workspaceFolder}/.pixi/envs/test/bin/python",
-  "python.testing.pytestEnabled": true
+  "python.testing.pytestEnabled": true,
+  "python-envs.defaultEnvManager": "renan-r-santos.pixi-code:pixi",
+  "python-envs.defaultPackageManager": "renan-r-santos.pixi-code:pixi"
 }

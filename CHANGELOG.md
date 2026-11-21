@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+### Added
+- **`demo` Pixi environment and optional extra**: `pixi run -e demo ...` (or `pip install autostorage[demo]`) adds the ORCA Python Interface, `orca-pi>=2.0.0`, for the demos in `demo/`. It is not a run dependency of autostorage.
+- The Pixi `dev` environment includes the `demo` feature, so `orca-pi` and `xyzrender` are available there too. The `demo` feature and extra add `xyzrender>=0.3.8`, which `autogeom.render_svg` needs to render molecules in the demos.
 
 ## [0.0.23] - 2026-11-19
 ### Added

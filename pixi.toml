@@ -7,7 +7,7 @@ requires-pixi = ">=0.82"
 [dependencies]
 autostorage = { path = "." }
 # Toggle with `pixi run local start|stop` (see scripts/local.sh)
-# autogeom = { path = "../autogeom" }  # local:true
+autogeom = { path = "../autogeom" }  # local:true
 
 [package]
 name = "autostorage"
@@ -30,7 +30,9 @@ autogeom = "autogeom"  # from the avcopan/automech channel
 [environments]
 default = { solve-group = "default" }
 test = { features = ["test"], solve-group = "default"}
-dev = { features = ["dev", "test"], solve-group = "default"}
+dev = { features = ["dev", "test", "demo"], solve-group = "default"}
+# Run the demos in demo/ with the ORCA Python Interface (ORCA itself is installed separately)
+demo = { features = ["demo"], solve-group = "default" }
 # Test with the lowest versions allowed by the lower bounds on the dependencies
 test-lowest = { features = ["test", "lowest"] }
 
@@ -60,6 +62,14 @@ libstdcxx-ng = ">=13"
 # to ancient source-only releases that fail to build
 [feature.lowest.pypi-options]
 no-build = true
+
+[feature.demo.dependencies]
+# Keep in sync with the `demo` extra in pyproject.toml
+orca-pi = ">=2.0.0"
+
+[feature.demo.pypi-dependencies]
+# Molecule rendering for autogeom.render_svg (only on PyPI)
+xyzrender = ">=0.3.8"
 
 [feature.dev.dependencies]
 # Dependency management

@@ -17,6 +17,11 @@ dependencies = [
 ]
 requires-python = ">= 3.13"
 
+[project.optional-dependencies]
+# ORCA Python Interface and xyzrender (molecule rendering) for the demos in demo/
+# (see the Pixi demo environment)
+demo = ["orca-pi>=2.0.0", "xyzrender>=0.3.8"]
+
 [project.urls]
 Repository = "https://github.com/avcopan/autostorage"
 Documentation = "https://avcopan.github.io/autostorage/"

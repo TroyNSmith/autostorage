@@ -69,7 +69,7 @@ from autostorage import Database, IdentityAlgorithmRegistry, IdentityKind, rdkit
 def rmsd_conformer_identity_fn(
     geo: Geometry, other_geos: Mapping[str, Geometry] | None = None
 ) -> str:
-    """Reuse the label of an existing conformer within 0.1 Å RMSD, or make a new one."""
+    """Reuse the label of an existing conformer within 0.1 Å RMSD, or make 1a new one."""
     for label, other_geo in (other_geos or {}).items():
         aligned = autogeom.rotate(
             autogeom.center(geo), autogeom.alignment_rotation(geo, other_geo)
